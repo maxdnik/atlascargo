@@ -462,7 +462,10 @@ export async function convertQuoteToShipmentAction(
 
     const quote = await prisma.quote.findFirst({
       where: { id, companyId: ctx.companyId },
-      include: { customer: { select: { id: true } } },
+      include: {
+        customer: { select: { id: true } },
+        shipment: { select: { id: true } },
+      },
     });
     if (!quote) throw new Error("Quote not found");
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect, useState, useCallback } from "react";
+import { useActionState, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Trash2, Plus } from "lucide-react";
 
@@ -65,7 +65,7 @@ export function QuoteForm({ action, defaults, customers, submitLabel, isLocked }
   const [state, formAction, pending] = useActionState(action, initialState);
   const router = useRouter();
 
-  const initCharges = useCallback((): ChargeRow[] => {
+  const [charges, setCharges] = useState<ChargeRow[]>(() => {
     if (defaults?.charges && defaults.charges.length > 0) {
       return defaults.charges.map((c) => ({
         key: nextKey(),
@@ -76,9 +76,7 @@ export function QuoteForm({ action, defaults, customers, submitLabel, isLocked }
       }));
     }
     return [];
-  }, [defaults?.charges]);
-
-  const [charges, setCharges] = useState<ChargeRow[]>(initCharges);
+  });
 
   useEffect(() => {
     if (state.success) {
