@@ -19,22 +19,45 @@ export function LoginForm() {
     setError(null);
     setLoading(true);
 
-    const result = await signIn("credentials", {
-      email,
-      password,
-      redirect: false,
-      callbackUrl,
-    });
+    try {
+      const result = await signIn("credentials", {
+        email,
+        password,
+        redirect: false,
+        callbackUrl,
+      });
 
-    setLoading(false);
+      setLoading(false);
 
-    if (result?.error) {
-      setError("Invalid email or password.");
-      return;
+      if (!result) {
+        setError("No response from authentication server.");
+        return;
+      }
+
+      if (result.error) {
+        if (result.error === "CredentialsSignin") {
+          setError("Invalid email or password.");
+        } else {
+          setError(`Sign in failed: ${result.error}`);
+        }
+        return;
+      }
+
+      if (!result.ok) {
+        setError(`Sign in failed (status ${result.status}).`);
+        return;
+      }
+
+      router.push(callbackUrl);
+      router.refresh();
+    } catch (submitError) {
+      setLoading(false);
+      setError(
+        submitError instanceof Error
+          ? `Unexpected login error: ${submitError.message}`
+          : "Unexpected login error.",
+      );
     }
-
-    router.push(callbackUrl);
-    router.refresh();
   }
 
   return (
