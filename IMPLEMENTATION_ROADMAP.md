@@ -1,5 +1,22 @@
 # Implementation Roadmap
 
+## Internal-company-first direction (updated)
+
+This platform is now explicitly optimized for **one real freight forwarding company** (with branch support), not for near-term SaaS commercialization.
+
+### Decision principles
+- Prioritize operational speed and daily usability for internal teams.
+- Keep architecture clean, but avoid heavy multi-tenant abstractions.
+- Maintain lightweight `companyId` + `branchId` scoping for data hygiene and branch permissions.
+- Prefer practical workflows over generic framework-like extensibility.
+- Implement only what operations, sales, admin, and management will use from day one.
+
+### What this changes in implementation
+- No separate tenant provisioning/orchestration complexity.
+- No advanced SaaS billing/tenant isolation layers for now.
+- Keep RBAC simple and role-oriented, with branch access where needed.
+- Build direct modules with clear operational value (customers, shipments, milestones, docs, finance basics).
+
 ## Principios
 
 - Entregas incrementales por dominio.

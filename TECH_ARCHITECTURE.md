@@ -7,7 +7,14 @@
 3. **Server-first data mutations**: Server Actions + Route Handlers para seguridad y rendimiento.
 4. **Security by default**: autenticación fuerte, autorización RBAC y auditoría.
 5. **Scalable data access**: Prisma + PostgreSQL con índices y constraints de negocio.
-6. **Evolución a SaaS multiempresa**: tenant-awareness (`companyId`, `branchId`) desde el diseño inicial.
+6. **Internal-company first**: priorizar velocidad operativa para una empresa real; mantener soporte de sucursales sin complejidad SaaS innecesaria.
+
+## 1.1) Scope decision (updated)
+
+- Este sistema se implementa como **OS interno de una sola empresa forwarder**.
+- Se mantiene `companyId` por coherencia de modelo y trazabilidad, pero sin construir aislamiento multi-tenant complejo.
+- Se priorizan flujos diarios operativos y administrativos por encima de abstracciones de producto SaaS.
+- Cualquier capacidad multi-company futura debe ser **ligera y no intrusiva** en el MVP.
 
 ## 2) Proposed stack
 
