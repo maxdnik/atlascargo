@@ -273,14 +273,59 @@ async function main() {
       mode: "AIR",
       direction: "IMPORT",
       status: "APPROVED",
+      origin: "MIA",
+      destination: "EZE",
+      incotermCode: "CPT",
       validUntil: new Date("2026-05-01T00:00:00.000Z"),
       currencyCode: "USD",
       totalBuy: "2350.00",
       totalSell: "3050.00",
       marginAmount: "700.00",
       marginPct: "0.2295",
+      sentAt: new Date("2026-04-01T10:00:00.000Z"),
       approvedAt: new Date("2026-04-02T15:30:00.000Z"),
     },
+  });
+
+  await prisma.quoteCharge.createMany({
+    data: [
+      {
+        id: "qc_0001_freight",
+        quoteId: "quote_2026_0001",
+        concept: "Air Freight MIA-EZE",
+        chargeType: "FREIGHT",
+        buyAmount: "1800.00",
+        sellAmount: "2400.00",
+        currencyCode: "USD",
+      },
+      {
+        id: "qc_0001_origin",
+        quoteId: "quote_2026_0001",
+        concept: "Origin Handling & Screening",
+        chargeType: "ORIGIN",
+        buyAmount: "250.00",
+        sellAmount: "300.00",
+        currencyCode: "USD",
+      },
+      {
+        id: "qc_0001_dest",
+        quoteId: "quote_2026_0001",
+        concept: "Destination Terminal Handling",
+        chargeType: "DESTINATION",
+        buyAmount: "200.00",
+        sellAmount: "250.00",
+        currencyCode: "USD",
+      },
+      {
+        id: "qc_0001_add",
+        quoteId: "quote_2026_0001",
+        concept: "Documentation Fee",
+        chargeType: "ADDITIONAL",
+        buyAmount: "100.00",
+        sellAmount: "100.00",
+        currencyCode: "USD",
+      },
+    ],
   });
 
   const shipmentAirImport = await prisma.shipment.upsert({

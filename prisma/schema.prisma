@@ -474,6 +474,9 @@ model Quote {
   mode          TransportMode
   direction     TradeDirection
   status        QuoteStatus    @default(DRAFT)
+  origin        String?
+  destination   String?
+  incotermCode  String?
   validUntil    DateTime?
   currencyCode  String
   exchangeRate  Decimal?
