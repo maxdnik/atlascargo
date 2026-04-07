@@ -29,15 +29,15 @@ export async function listShipments(companyId: string, filters?: ShipmentListFil
       ...(search
         ? {
             OR: [
-              { shipmentNumber: { contains: search, mode: "insensitive" } },
-              { referenceClient: { contains: search, mode: "insensitive" } },
-              { referenceInternal: { contains: search, mode: "insensitive" } },
-              { bookingRef: { contains: search, mode: "insensitive" } },
-              { houseRef: { contains: search, mode: "insensitive" } },
-              { masterRef: { contains: search, mode: "insensitive" } },
+              { shipmentNumber: { contains: search } },
+              { referenceClient: { contains: search } },
+              { referenceInternal: { contains: search } },
+              { bookingRef: { contains: search } },
+              { houseRef: { contains: search } },
+              { masterRef: { contains: search } },
               {
                 customer: {
-                  legalName: { contains: search, mode: "insensitive" },
+                  legalName: { contains: search },
                 },
               },
             ],

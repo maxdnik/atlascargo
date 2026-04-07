@@ -7,10 +7,10 @@ export async function listCustomers(companyId: string, query?: string) {
       ...(search
         ? {
             OR: [
-              { code: { contains: search, mode: "insensitive" } },
-              { legalName: { contains: search, mode: "insensitive" } },
-              { tradeName: { contains: search, mode: "insensitive" } },
-              { taxId: { contains: search, mode: "insensitive" } },
+              { code: { contains: search } },
+              { legalName: { contains: search } },
+              { tradeName: { contains: search } },
+              { taxId: { contains: search } },
             ],
           }
         : {}),

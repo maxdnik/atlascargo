@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "sqlite"
 }
 
 enum UserRole {
@@ -476,11 +476,11 @@ model Quote {
   status        QuoteStatus    @default(DRAFT)
   validUntil    DateTime?
   currencyCode  String
-  exchangeRate  Decimal?       @db.Decimal(14, 6)
-  totalBuy      Decimal        @default(0) @db.Decimal(14, 2)
-  totalSell     Decimal        @default(0) @db.Decimal(14, 2)
-  marginAmount  Decimal        @default(0) @db.Decimal(14, 2)
-  marginPct     Decimal        @default(0) @db.Decimal(7, 4)
+  exchangeRate  Decimal?
+  totalBuy      Decimal        @default(0)
+  totalSell     Decimal        @default(0)
+  marginAmount  Decimal        @default(0)
+  marginPct     Decimal        @default(0)
   internalNotes String?
   sentAt        DateTime?
   approvedAt    DateTime?
@@ -507,10 +507,10 @@ model QuoteItem {
   id           String   @id @default(cuid())
   quoteId      String
   description  String
-  qty          Decimal  @default(1) @db.Decimal(14, 3)
+  qty          Decimal  @default(1)
   uom          String?
-  buyAmount    Decimal  @default(0) @db.Decimal(14, 2)
-  sellAmount   Decimal  @default(0) @db.Decimal(14, 2)
+  buyAmount    Decimal  @default(0)
+  sellAmount   Decimal  @default(0)
   currencyCode String
   createdAt    DateTime @default(now())
 
@@ -523,8 +523,8 @@ model QuoteCharge {
   quoteId      String
   concept      String
   chargeType   String?
-  buyAmount    Decimal  @default(0) @db.Decimal(14, 2)
-  sellAmount   Decimal  @default(0) @db.Decimal(14, 2)
+  buyAmount    Decimal  @default(0)
+  sellAmount   Decimal  @default(0)
   currencyCode String
   createdAt    DateTime @default(now())
 
@@ -552,8 +552,8 @@ model Shipment {
   masterRef            String?
   commodity            String?
   packageCount         Int?
-  grossWeightKg        Decimal?       @db.Decimal(14, 3)
-  volumeM3             Decimal?       @db.Decimal(14, 3)
+  grossWeightKg        Decimal?
+  volumeM3             Decimal?
   etd                  DateTime?
   eta                  DateTime?
   atd                  DateTime?
@@ -641,8 +641,8 @@ model Container {
   containerNo   String
   containerType String
   sealNo        String?
-  tareWeightKg  Decimal? @db.Decimal(14, 3)
-  grossWeightKg Decimal? @db.Decimal(14, 3)
+  tareWeightKg  Decimal?
+  grossWeightKg Decimal?
   createdAt     DateTime @default(now())
 
   shipment Shipment @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
@@ -704,10 +704,10 @@ model Revenue {
   shipmentId    String
   customerId    String
   concept       String
-  amount        Decimal       @db.Decimal(14, 2)
+  amount        Decimal
   currencyCode  String
-  fxRate        Decimal?      @db.Decimal(14, 6)
-  amountBase    Decimal?      @db.Decimal(14, 2)
+  fxRate        Decimal?
+  amountBase    Decimal?
   dueDate       DateTime?
   status        FinanceStatus @default(DRAFT)
   invoiceNumber String?
@@ -733,10 +733,10 @@ model Expense {
   shipmentId    String
   supplierId    String?
   concept       String
-  amount        Decimal       @db.Decimal(14, 2)
+  amount        Decimal
   currencyCode  String
-  fxRate        Decimal?      @db.Decimal(14, 6)
-  amountBase    Decimal?      @db.Decimal(14, 2)
+  fxRate        Decimal?
+  amountBase    Decimal?
   dueDate       DateTime?
   status        FinanceStatus @default(DRAFT)
   invoiceNumber String?
@@ -765,7 +765,7 @@ model Invoice {
   number       String
   issueDate    DateTime
   dueDate      DateTime?
-  amount       Decimal       @db.Decimal(14, 2)
+  amount       Decimal
   currencyCode String
   status       FinanceStatus @default(DRAFT)
   invoiceType  String
@@ -791,7 +791,7 @@ model Payment {
   expenseId    String?
   invoiceId    String?
   currencyCode String
-  amount       Decimal  @db.Decimal(14, 2)
+  amount       Decimal
   paymentDate  DateTime
   method       String?
   reference    String?
@@ -814,7 +814,7 @@ model ExchangeRate {
   companyId     String
   baseCurrency  String
   quoteCurrency String
-  rate          Decimal  @db.Decimal(14, 6)
+  rate          Decimal
   date          DateTime
   createdAt     DateTime @default(now())
 

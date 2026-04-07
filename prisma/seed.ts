@@ -1,6 +1,6 @@
 import "dotenv/config";
+import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
 import { PrismaClient } from "@prisma/client";
-import { PrismaPg } from "@prisma/adapter-pg";
 import bcrypt from "bcryptjs";
 
 const connectionString = process.env.DATABASE_URL;
@@ -10,7 +10,7 @@ if (!connectionString) {
 }
 
 const prisma = new PrismaClient({
-  adapter: new PrismaPg({ connectionString }),
+  adapter: new PrismaBetterSqlite3({ url: connectionString }),
 });
 
 async function main() {
@@ -88,7 +88,6 @@ async function main() {
       { code: "EUR", name: "Euro", symbol: "EUR", decimals: 2, active: true },
       { code: "ARS", name: "Argentine Peso", symbol: "AR$", decimals: 2, active: true },
     ],
-    skipDuplicates: true,
   });
 
   await prisma.incoterm.createMany({
@@ -100,7 +99,6 @@ async function main() {
       { code: "FCA", description: "Free Carrier", active: true },
       { code: "CPT", description: "Carriage Paid To", active: true },
     ],
-    skipDuplicates: true,
   });
 
   const [portSha, portBue] = await Promise.all([
@@ -383,7 +381,6 @@ async function main() {
         eta: new Date("2026-05-18T08:00:00.000Z"),
       },
     ],
-    skipDuplicates: true,
   });
 
   await prisma.shipmentMilestone.createMany({
@@ -443,7 +440,6 @@ async function main() {
         assignedToId: adminUser.id,
       },
     ],
-    skipDuplicates: true,
   });
 
   await prisma.revenue.upsert({
