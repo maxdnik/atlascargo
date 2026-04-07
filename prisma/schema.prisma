@@ -4,7 +4,6 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
 
 enum UserRole {
@@ -176,14 +175,14 @@ enum EntityType {
 }
 
 model Company {
-  id         String   @id @default(cuid())
-  legalName  String
-  tradeName  String?
-  taxId      String?
-  country    String?
-  timezone   String   @default("UTC")
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  id        String   @id @default(cuid())
+  legalName String
+  tradeName String?
+  taxId     String?
+  country   String?
+  timezone  String   @default("UTC")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   branches      Branch[]
   users         User[]
@@ -214,16 +213,16 @@ model Branch {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  company      Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  usersAccess  UserBranchAccess[]
-  customers    Customer[]
-  prospects    Prospect[]
-  quotes       Quote[]
-  shipments    Shipment[]
-  revenues     Revenue[]
-  expenses     Expense[]
-  invoices     Invoice[]
-  payments     Payment[]
+  company     Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  usersAccess UserBranchAccess[]
+  customers   Customer[]
+  prospects   Prospect[]
+  quotes      Quote[]
+  shipments   Shipment[]
+  revenues    Revenue[]
+  expenses    Expense[]
+  invoices    Invoice[]
+  payments    Payment[]
 
   @@unique([companyId, code])
   @@index([companyId, active])
@@ -240,16 +239,16 @@ model User {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  company            Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  company            Company              @relation(fields: [companyId], references: [id], onDelete: Cascade)
   branchAccesses     UserBranchAccess[]
   roles              UserRoleAssignment[]
-  ownedQuotes        Quote[]             @relation("QuoteOwner")
-  ownedShipments     Shipment[]          @relation("ShipmentOwner")
-  milestonesAssigned ShipmentMilestone[] @relation("MilestoneAssignee")
-  tasksAssigned      Task[]              @relation("TaskAssignee")
-  activities         ActivityLog[]       @relation("ActivityActor")
+  ownedQuotes        Quote[]              @relation("QuoteOwner")
+  ownedShipments     Shipment[]           @relation("ShipmentOwner")
+  milestonesAssigned ShipmentMilestone[]  @relation("MilestoneAssignee")
+  tasksAssigned      Task[]               @relation("TaskAssignee")
+  activities         ActivityLog[]        @relation("ActivityActor")
   notifications      Notification[]
-  uploadedDocuments  ShipmentDocument[]  @relation("DocumentUploader")
+  uploadedDocuments  ShipmentDocument[]   @relation("DocumentUploader")
 
   @@unique([companyId, email])
   @@index([companyId, role, isActive])
@@ -265,7 +264,7 @@ model Role {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  company         Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  company         Company              @relation(fields: [companyId], references: [id], onDelete: Cascade)
   permissions     RolePermission[]
   userAssignments UserRoleAssignment[]
 
@@ -307,11 +306,11 @@ model UserRoleAssignment {
 }
 
 model UserBranchAccess {
-  id             String  @id @default(cuid())
+  id             String   @id @default(cuid())
   userId         String
   branchId       String
-  canViewFinance Boolean @default(false)
-  canApprove     Boolean @default(false)
+  canViewFinance Boolean  @default(false)
+  canApprove     Boolean  @default(false)
   createdAt      DateTime @default(now())
 
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -328,12 +327,12 @@ model Currency {
   active    Boolean  @default(true)
   createdAt DateTime @default(now())
 
-  quotes      Quote[]
-  revenues    Revenue[]
-  expenses    Expense[]
-  invoices    Invoice[]
-  payments    Payment[]
-  quoteItems  QuoteItem[]
+  quotes       Quote[]
+  revenues     Revenue[]
+  expenses     Expense[]
+  invoices     Invoice[]
+  payments     Payment[]
+  quoteItems   QuoteItem[]
   quoteCharges QuoteCharge[]
 }
 
@@ -371,10 +370,10 @@ model Airport {
   active    Boolean  @default(true)
   createdAt DateTime @default(now())
 
-  shipmentOrigin     Shipment[]    @relation("ShipmentOriginAirport")
-  shipmentDestination Shipment[]   @relation("ShipmentDestinationAirport")
-  legOriginAirport   ShipmentLeg[] @relation("LegOriginAirport")
-  legDestAirport     ShipmentLeg[] @relation("LegDestinationAirport")
+  shipmentOrigin      Shipment[]    @relation("ShipmentOriginAirport")
+  shipmentDestination Shipment[]    @relation("ShipmentDestinationAirport")
+  legOriginAirport    ShipmentLeg[] @relation("LegOriginAirport")
+  legDestAirport      ShipmentLeg[] @relation("LegDestinationAirport")
 }
 
 model Customer {
@@ -393,12 +392,14 @@ model Customer {
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
-  company   Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  branch    Branch?   @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  company   Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch    Branch?    @relation(fields: [branchId], references: [id], onDelete: SetNull)
   contacts  Contact[]
   quotes    Quote[]
   shipments Shipment[]
   revenues  Revenue[]
+  invoices  Invoice[]
+  notes     Note[]
 
   @@unique([companyId, code])
   @@index([companyId, legalName])
@@ -416,8 +417,8 @@ model Prospect {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  company  Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  branch   Branch?  @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch   Branch?   @relation(fields: [branchId], references: [id], onDelete: SetNull)
   contacts Contact[]
 }
 
@@ -457,6 +458,7 @@ model BusinessPartner {
   shipmentParty ShipmentParty[]
   shipmentLegs  ShipmentLeg[]
   expenses      Expense[]
+  invoices      Invoice[]
 
   @@index([companyId, partnerType, active])
   @@index([companyId, name])
@@ -479,21 +481,22 @@ model Quote {
   totalSell     Decimal        @default(0) @db.Decimal(14, 2)
   marginAmount  Decimal        @default(0) @db.Decimal(14, 2)
   marginPct     Decimal        @default(0) @db.Decimal(7, 4)
-  notes         String?
+  internalNotes String?
   sentAt        DateTime?
   approvedAt    DateTime?
   rejectedAt    DateTime?
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
 
-  company   Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  branch    Branch?    @relation(fields: [branchId], references: [id], onDelete: SetNull)
-  customer  Customer   @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  owner     User?      @relation("QuoteOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
-  currency  Currency   @relation(fields: [currencyCode], references: [code], onDelete: Restrict)
-  items     QuoteItem[]
-  charges   QuoteCharge[]
-  shipment  Shipment?
+  company  Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch   Branch?       @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  customer Customer      @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  owner    User?         @relation("QuoteOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  currency Currency      @relation(fields: [currencyCode], references: [code], onDelete: Restrict)
+  items    QuoteItem[]
+  charges  QuoteCharge[]
+  shipment Shipment?
+  notes    Note[]
 
   @@unique([companyId, quoteNumber])
   @@index([companyId, status, createdAt])
@@ -530,60 +533,59 @@ model QuoteCharge {
 }
 
 model Shipment {
-  id                    String         @id @default(cuid())
-  companyId             String
-  branchId              String?
-  shipmentNumber        String
-  customerId            String
-  quoteId               String?        @unique
-  ownerUserId           String?
-  mode                  TransportMode
-  direction             TradeDirection
-  status                ShipmentStatus @default(DRAFT)
-  incotermCode          String?
-  serviceLevel          String?
-  referenceClient       String?
-  referenceInternal     String?
-  bookingRef            String?
-  houseRef              String?
-  masterRef             String?
-  commodity             String?
-  packageCount          Int?
-  grossWeightKg         Decimal?       @db.Decimal(14, 3)
-  volumeM3              Decimal?       @db.Decimal(14, 3)
-  etd                   DateTime?
-  eta                   DateTime?
-  atd                   DateTime?
-  ata                   DateTime?
-  polPortId             String?
-  podPortId             String?
-  originAirportId       String?
-  destinationAirportId  String?
-  notes                 String?
-  createdAt             DateTime       @default(now())
-  updatedAt             DateTime       @updatedAt
+  id                   String         @id @default(cuid())
+  companyId            String
+  branchId             String?
+  shipmentNumber       String
+  customerId           String
+  quoteId              String?        @unique
+  ownerUserId          String?
+  mode                 TransportMode
+  direction            TradeDirection
+  status               ShipmentStatus @default(DRAFT)
+  incotermCode         String?
+  serviceLevel         String?
+  referenceClient      String?
+  referenceInternal    String?
+  bookingRef           String?
+  houseRef             String?
+  masterRef            String?
+  commodity            String?
+  packageCount         Int?
+  grossWeightKg        Decimal?       @db.Decimal(14, 3)
+  volumeM3             Decimal?       @db.Decimal(14, 3)
+  etd                  DateTime?
+  eta                  DateTime?
+  atd                  DateTime?
+  ata                  DateTime?
+  polPortId            String?
+  podPortId            String?
+  originAirportId      String?
+  destinationAirportId String?
+  notes                String?
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
 
-  company             Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  branch              Branch?             @relation(fields: [branchId], references: [id], onDelete: SetNull)
-  customer            Customer            @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  quote               Quote?              @relation(fields: [quoteId], references: [id], onDelete: SetNull)
-  owner               User?               @relation("ShipmentOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
-  incoterm            Incoterm?           @relation(fields: [incotermCode], references: [code], onDelete: SetNull)
-  polPort             Port?               @relation("ShipmentPOLPort", fields: [polPortId], references: [id], onDelete: SetNull)
-  podPort             Port?               @relation("ShipmentPODPort", fields: [podPortId], references: [id], onDelete: SetNull)
-  originAirport       Airport?            @relation("ShipmentOriginAirport", fields: [originAirportId], references: [id], onDelete: SetNull)
-  destinationAirport  Airport?            @relation("ShipmentDestinationAirport", fields: [destinationAirportId], references: [id], onDelete: SetNull)
-  parties             ShipmentParty[]
-  legs                ShipmentLeg[]
-  containers          Container[]
-  milestones          ShipmentMilestone[]
-  documents           ShipmentDocument[]
-  revenues            Revenue[]
-  expenses            Expense[]
-  invoices            Invoice[]
-  tasks               Task[]
-  notesLog            Note[]
-  activities          ActivityLog[]
+  company            Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch             Branch?             @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  customer           Customer            @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  quote              Quote?              @relation(fields: [quoteId], references: [id], onDelete: SetNull)
+  owner              User?               @relation("ShipmentOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  incoterm           Incoterm?           @relation(fields: [incotermCode], references: [code], onDelete: SetNull)
+  polPort            Port?               @relation("ShipmentPOLPort", fields: [polPortId], references: [id], onDelete: SetNull)
+  podPort            Port?               @relation("ShipmentPODPort", fields: [podPortId], references: [id], onDelete: SetNull)
+  originAirport      Airport?            @relation("ShipmentOriginAirport", fields: [originAirportId], references: [id], onDelete: SetNull)
+  destinationAirport Airport?            @relation("ShipmentDestinationAirport", fields: [destinationAirportId], references: [id], onDelete: SetNull)
+  parties            ShipmentParty[]
+  legs               ShipmentLeg[]
+  containers         Container[]
+  milestones         ShipmentMilestone[]
+  documents          ShipmentDocument[]
+  revenues           Revenue[]
+  expenses           Expense[]
+  invoices           Invoice[]
+  tasks              Task[]
+  notesLog           Note[]
 
   @@unique([companyId, shipmentNumber])
   @@index([companyId, status, mode])
@@ -592,43 +594,43 @@ model Shipment {
 }
 
 model ShipmentParty {
-  id          String            @id @default(cuid())
-  shipmentId  String
-  role        ShipmentPartyRole
-  partnerId   String?
-  partyName   String
-  createdAt   DateTime          @default(now())
+  id         String            @id @default(cuid())
+  shipmentId String
+  role       ShipmentPartyRole
+  partnerId  String?
+  partyName  String
+  createdAt  DateTime          @default(now())
 
-  shipment Shipment        @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  shipment Shipment         @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
   partner  BusinessPartner? @relation(fields: [partnerId], references: [id], onDelete: SetNull)
 
   @@index([shipmentId, role])
 }
 
 model ShipmentLeg {
-  id                String        @id @default(cuid())
-  shipmentId        String
-  sequence          Int
-  mode              TransportMode
-  originPortId      String?
-  destinationPortId String?
-  originAirportId   String?
+  id                   String        @id @default(cuid())
+  shipmentId           String
+  sequence             Int
+  mode                 TransportMode
+  originPortId         String?
+  destinationPortId    String?
+  originAirportId      String?
   destinationAirportId String?
-  carrierPartnerId  String?
-  vesselFlight      String?
-  etd               DateTime?
-  eta               DateTime?
-  atd               DateTime?
-  ata               DateTime?
-  createdAt         DateTime      @default(now())
-  updatedAt         DateTime      @updatedAt
+  carrierPartnerId     String?
+  vesselFlight         String?
+  etd                  DateTime?
+  eta                  DateTime?
+  atd                  DateTime?
+  ata                  DateTime?
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
 
-  shipment          Shipment       @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
-  originPort        Port?          @relation("LegOriginPort", fields: [originPortId], references: [id], onDelete: SetNull)
-  destinationPort   Port?          @relation("LegDestinationPort", fields: [destinationPortId], references: [id], onDelete: SetNull)
-  originAirport     Airport?       @relation("LegOriginAirport", fields: [originAirportId], references: [id], onDelete: SetNull)
-  destinationAirport Airport?      @relation("LegDestinationAirport", fields: [destinationAirportId], references: [id], onDelete: SetNull)
-  carrierPartner    BusinessPartner? @relation(fields: [carrierPartnerId], references: [id], onDelete: SetNull)
+  shipment           Shipment         @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  originPort         Port?            @relation("LegOriginPort", fields: [originPortId], references: [id], onDelete: SetNull)
+  destinationPort    Port?            @relation("LegDestinationPort", fields: [destinationPortId], references: [id], onDelete: SetNull)
+  originAirport      Airport?         @relation("LegOriginAirport", fields: [originAirportId], references: [id], onDelete: SetNull)
+  destinationAirport Airport?         @relation("LegDestinationAirport", fields: [destinationAirportId], references: [id], onDelete: SetNull)
+  carrierPartner     BusinessPartner? @relation(fields: [carrierPartnerId], references: [id], onDelete: SetNull)
 
   @@unique([shipmentId, sequence])
 }
@@ -665,8 +667,8 @@ model ShipmentMilestone {
   shipment   Shipment @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
   assignedTo User?    @relation("MilestoneAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
 
-  @@index([shipmentId, status, expectedAt])
   @@unique([shipmentId, code])
+  @@index([shipmentId, status, expectedAt])
 }
 
 model ShipmentDocument {
@@ -696,112 +698,113 @@ model ShipmentDocument {
 }
 
 model Revenue {
-  id             String        @id @default(cuid())
-  companyId      String
-  branchId       String?
-  shipmentId     String
-  customerId     String
-  concept        String
-  amount         Decimal       @db.Decimal(14, 2)
-  currencyCode   String
-  fxRate         Decimal?      @db.Decimal(14, 6)
-  amountBase     Decimal?      @db.Decimal(14, 2)
-  dueDate        DateTime?
-  status         FinanceStatus @default(DRAFT)
-  invoiceNumber  String?
-  postedAt       DateTime?
-  createdAt      DateTime      @default(now())
-  updatedAt      DateTime      @updatedAt
+  id            String        @id @default(cuid())
+  companyId     String
+  branchId      String?
+  shipmentId    String
+  customerId    String
+  concept       String
+  amount        Decimal       @db.Decimal(14, 2)
+  currencyCode  String
+  fxRate        Decimal?      @db.Decimal(14, 6)
+  amountBase    Decimal?      @db.Decimal(14, 2)
+  dueDate       DateTime?
+  status        FinanceStatus @default(DRAFT)
+  invoiceNumber String?
+  postedAt      DateTime?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
 
-  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  branch    Branch?  @relation(fields: [branchId], references: [id], onDelete: SetNull)
-  shipment  Shipment @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
-  customer  Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  currency  Currency @relation(fields: [currencyCode], references: [code], onDelete: Restrict)
-  payments  Payment[]
+  company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch   Branch?   @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  shipment Shipment  @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  customer Customer  @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  currency Currency  @relation(fields: [currencyCode], references: [code], onDelete: Restrict)
+  payments Payment[]
 
   @@index([companyId, dueDate, status])
   @@index([customerId, status])
 }
 
 model Expense {
-  id             String        @id @default(cuid())
-  companyId      String
-  branchId       String?
-  shipmentId     String
-  supplierId     String?
-  concept        String
-  amount         Decimal       @db.Decimal(14, 2)
-  currencyCode   String
-  fxRate         Decimal?      @db.Decimal(14, 6)
-  amountBase     Decimal?      @db.Decimal(14, 2)
-  dueDate        DateTime?
-  status         FinanceStatus @default(DRAFT)
-  invoiceNumber  String?
-  postedAt       DateTime?
-  createdAt      DateTime      @default(now())
-  updatedAt      DateTime      @updatedAt
+  id            String        @id @default(cuid())
+  companyId     String
+  branchId      String?
+  shipmentId    String
+  supplierId    String?
+  concept       String
+  amount        Decimal       @db.Decimal(14, 2)
+  currencyCode  String
+  fxRate        Decimal?      @db.Decimal(14, 6)
+  amountBase    Decimal?      @db.Decimal(14, 2)
+  dueDate       DateTime?
+  status        FinanceStatus @default(DRAFT)
+  invoiceNumber String?
+  postedAt      DateTime?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
 
-  company   Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  branch    Branch?          @relation(fields: [branchId], references: [id], onDelete: SetNull)
-  shipment  Shipment         @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
-  supplier  BusinessPartner? @relation(fields: [supplierId], references: [id], onDelete: SetNull)
-  currency  Currency         @relation(fields: [currencyCode], references: [code], onDelete: Restrict)
-  payments  Payment[]
+  company  Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch   Branch?          @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  shipment Shipment         @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  supplier BusinessPartner? @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  currency Currency         @relation(fields: [currencyCode], references: [code], onDelete: Restrict)
+  payments Payment[]
 
   @@index([companyId, dueDate, status])
   @@index([supplierId, status])
 }
 
 model Invoice {
-  id              String        @id @default(cuid())
-  companyId       String
-  branchId        String?
-  shipmentId      String?
-  customerId      String?
-  supplierId      String?
-  number          String
-  issueDate       DateTime
-  dueDate         DateTime?
-  amount          Decimal       @db.Decimal(14, 2)
-  currencyCode    String
-  status          FinanceStatus @default(DRAFT)
-  invoiceType     String
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
+  id           String        @id @default(cuid())
+  companyId    String
+  branchId     String?
+  shipmentId   String?
+  customerId   String?
+  supplierId   String?
+  number       String
+  issueDate    DateTime
+  dueDate      DateTime?
+  amount       Decimal       @db.Decimal(14, 2)
+  currencyCode String
+  status       FinanceStatus @default(DRAFT)
+  invoiceType  String
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
 
-  company   Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  branch    Branch?          @relation(fields: [branchId], references: [id], onDelete: SetNull)
-  shipment  Shipment?        @relation(fields: [shipmentId], references: [id], onDelete: SetNull)
-  customer  Customer?        @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  supplier  BusinessPartner? @relation(fields: [supplierId], references: [id], onDelete: SetNull)
-  currency  Currency         @relation(fields: [currencyCode], references: [code], onDelete: Restrict)
+  company  Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch   Branch?          @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  shipment Shipment?        @relation(fields: [shipmentId], references: [id], onDelete: SetNull)
+  customer Customer?        @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  supplier BusinessPartner? @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  currency Currency         @relation(fields: [currencyCode], references: [code], onDelete: Restrict)
+  payments Payment[]
 
   @@unique([companyId, number, invoiceType])
 }
 
 model Payment {
-  id            String   @id @default(cuid())
-  companyId     String
-  branchId      String?
-  revenueId     String?
-  expenseId     String?
-  invoiceId     String?
-  currencyCode  String
-  amount        Decimal  @db.Decimal(14, 2)
-  paymentDate   DateTime
-  method        String?
-  reference     String?
-  notes         String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id           String   @id @default(cuid())
+  companyId    String
+  branchId     String?
+  revenueId    String?
+  expenseId    String?
+  invoiceId    String?
+  currencyCode String
+  amount       Decimal  @db.Decimal(14, 2)
+  paymentDate  DateTime
+  method       String?
+  reference    String?
+  notes        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
-  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  branch    Branch?  @relation(fields: [branchId], references: [id], onDelete: SetNull)
-  revenue   Revenue? @relation(fields: [revenueId], references: [id], onDelete: SetNull)
-  expense   Expense? @relation(fields: [expenseId], references: [id], onDelete: SetNull)
-  invoice   Invoice? @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
-  currency  Currency @relation(fields: [currencyCode], references: [code], onDelete: Restrict)
+  company  Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch   Branch?  @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  revenue  Revenue? @relation(fields: [revenueId], references: [id], onDelete: SetNull)
+  expense  Expense? @relation(fields: [expenseId], references: [id], onDelete: SetNull)
+  invoice  Invoice? @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  currency Currency @relation(fields: [currencyCode], references: [code], onDelete: Restrict)
 
   @@index([companyId, paymentDate])
 }
@@ -821,18 +824,18 @@ model ExchangeRate {
 }
 
 model Task {
-  id          String       @id @default(cuid())
-  companyId   String
-  shipmentId  String?
-  title       String
-  description String?
-  dueAt       DateTime?
-  status      TaskStatus   @default(TODO)
-  priority    TaskPriority @default(MEDIUM)
+  id           String       @id @default(cuid())
+  companyId    String
+  shipmentId   String?
+  title        String
+  description  String?
+  dueAt        DateTime?
+  status       TaskStatus   @default(TODO)
+  priority     TaskPriority @default(MEDIUM)
   assignedToId String?
-  createdById String?
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
+  createdById  String?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
 
   company    Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
   shipment   Shipment? @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
@@ -842,14 +845,14 @@ model Task {
 }
 
 model Note {
-  id         String   @id @default(cuid())
-  companyId  String
-  shipmentId String?
-  quoteId    String?
-  customerId String?
-  content    String
+  id          String   @id @default(cuid())
+  companyId   String
+  shipmentId  String?
+  quoteId     String?
+  customerId  String?
+  content     String
   createdById String?
-  createdAt  DateTime @default(now())
+  createdAt   DateTime @default(now())
 
   company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
   shipment Shipment? @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
