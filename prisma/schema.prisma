@@ -243,6 +243,7 @@ model User {
   branchAccesses     UserBranchAccess[]
   roles              UserRoleAssignment[]
   ownedQuotes        Quote[]              @relation("QuoteOwner")
+  approvedQuotes     Quote[]              @relation("QuoteApprover")
   ownedShipments     Shipment[]           @relation("ShipmentOwner")
   milestonesAssigned ShipmentMilestone[]  @relation("MilestoneAssignee")
   tasksAssigned      Task[]               @relation("TaskAssignee")
@@ -465,41 +466,52 @@ model BusinessPartner {
 }
 
 model Quote {
-  id            String         @id @default(cuid())
-  companyId     String
-  branchId      String?
-  quoteNumber   String
-  customerId    String
-  ownerUserId   String?
-  mode          TransportMode
-  direction     TradeDirection
-  status        QuoteStatus    @default(DRAFT)
-  origin        String?
-  destination   String?
-  incotermCode  String?
-  validUntil    DateTime?
-  currencyCode  String
-  exchangeRate  Decimal?
-  totalBuy      Decimal        @default(0)
-  totalSell     Decimal        @default(0)
-  marginAmount  Decimal        @default(0)
-  marginPct     Decimal        @default(0)
-  internalNotes String?
-  sentAt        DateTime?
-  approvedAt    DateTime?
-  rejectedAt    DateTime?
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
+  id                    String         @id @default(cuid())
+  companyId             String
+  branchId              String?
+  quoteNumber           String
+  customerId            String
+  ownerUserId           String?
+  approvedByUserId      String?
+  mode                  TransportMode
+  direction             TradeDirection
+  status                QuoteStatus    @default(DRAFT)
+  origin                String?
+  destination           String?
+  incotermCode          String?
+  commodity             String?
+  validUntil            DateTime?
+  currencyCode          String
+  exchangeRate          Decimal?
+  freightSell           Decimal        @default(0)
+  originChargesSell     Decimal        @default(0)
+  destinationChargesSell Decimal       @default(0)
+  additionalChargesSell Decimal        @default(0)
+  totalSell             Decimal        @default(0)
+  freightCost           Decimal        @default(0)
+  originChargesCost     Decimal        @default(0)
+  destinationChargesCost Decimal       @default(0)
+  additionalChargesCost Decimal        @default(0)
+  totalCost             Decimal        @default(0)
+  grossMarginAmount     Decimal        @default(0)
+  grossMarginPercent    Decimal        @default(0)
+  internalNotes         String?
+  sentAt                DateTime?
+  approvedAt            DateTime?
+  rejectedAt            DateTime?
+  createdAt             DateTime       @default(now())
+  updatedAt             DateTime       @updatedAt
 
-  company  Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  branch   Branch?       @relation(fields: [branchId], references: [id], onDelete: SetNull)
-  customer Customer      @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  owner    User?         @relation("QuoteOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
-  currency Currency      @relation(fields: [currencyCode], references: [code], onDelete: Restrict)
-  items    QuoteItem[]
-  charges  QuoteCharge[]
-  shipment Shipment?
-  notes    Note[]
+  company    Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch     Branch?   @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  customer   Customer  @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  owner      User?     @relation("QuoteOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  approvedBy User?     @relation("QuoteApprover", fields: [approvedByUserId], references: [id], onDelete: SetNull)
+  currency   Currency  @relation(fields: [currencyCode], references: [code], onDelete: Restrict)
+  items      QuoteItem[]
+  charges    QuoteCharge[]
+  shipment   Shipment?
+  notes      Note[]
 
   @@unique([companyId, quoteNumber])
   @@index([companyId, status, createdAt])

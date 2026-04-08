@@ -1,5 +1,6 @@
 "use server";
 
+import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
@@ -14,38 +15,44 @@ export type QuoteActionState = {
   error?: string;
 };
 
-const chargeSchema = z.object({
-  concept: z.string().min(1),
-  chargeType: z.enum(["FREIGHT", "ORIGIN", "DESTINATION", "ADDITIONAL"]),
-  buyAmount: z.coerce.number().min(0).default(0),
-  sellAmount: z.coerce.number().min(0).default(0),
+const pricingSchema = z.object({
+  freightSell: z.coerce.number().min(0).default(0),
+  originChargesSell: z.coerce.number().min(0).default(0),
+  destinationChargesSell: z.coerce.number().min(0).default(0),
+  additionalChargesSell: z.coerce.number().min(0).default(0),
+  freightCost: z.coerce.number().min(0).default(0),
+  originChargesCost: z.coerce.number().min(0).default(0),
+  destinationChargesCost: z.coerce.number().min(0).default(0),
+  additionalChargesCost: z.coerce.number().min(0).default(0),
 });
 
-const quoteCreateSchema = z.object({
+const quoteSchema = z.object({
   customerId: z.string().min(1),
   mode: z.enum(["AIR", "OCEAN", "ROAD", "RAIL", "MULTIMODAL", "SPECIAL"]),
   direction: z.enum(["IMPORT", "EXPORT", "CROSS_TRADE"]),
   origin: z.string().max(120).optional(),
   destination: z.string().max(120).optional(),
   incotermCode: z.string().max(10).optional(),
+  commodity: z.string().max(200).optional(),
   validUntil: z.string().optional(),
   currencyCode: z.string().min(3).max(3).default("USD"),
-  internalNotes: z.string().max(1000).optional(),
-  charges: z.array(chargeSchema).default([]),
-});
+  internalNotes: z.string().max(2000).optional(),
+}).merge(pricingSchema);
 
-function normalizeOptional(value?: string | null) {
+function norm(value?: string | null) {
   if (!value) return null;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
+  const t = value.trim();
+  return t.length > 0 ? t : null;
 }
 
-function computeTotals(charges: Array<{ buyAmount: number; sellAmount: number }>) {
-  const totalBuy = charges.reduce((sum, c) => sum + c.buyAmount, 0);
-  const totalSell = charges.reduce((sum, c) => sum + c.sellAmount, 0);
-  const marginAmount = totalSell - totalBuy;
-  const marginPct = totalSell > 0 ? marginAmount / totalSell : 0;
-  return { totalBuy, totalSell, marginAmount, marginPct };
+function computeTotals(p: z.infer<typeof pricingSchema>) {
+  const totalSell =
+    p.freightSell + p.originChargesSell + p.destinationChargesSell + p.additionalChargesSell;
+  const totalCost =
+    p.freightCost + p.originChargesCost + p.destinationChargesCost + p.additionalChargesCost;
+  const grossMarginAmount = totalSell - totalCost;
+  const grossMarginPercent = totalSell > 0 ? grossMarginAmount / totalSell : 0;
+  return { totalSell, totalCost, grossMarginAmount, grossMarginPercent };
 }
 
 async function getQuoteContext(permission: "UPDATE" | "CREATE" | "APPROVE" | "DELETE") {
@@ -53,16 +60,37 @@ async function getQuoteContext(permission: "UPDATE" | "CREATE" | "APPROVE" | "DE
   if (!session?.user?.id || !session.user.companyId) {
     throw new Error("Unauthorized");
   }
-
   if (!hasPermission(session.user.role, "QUOTES", permission)) {
     throw new Error("Insufficient permissions");
   }
-
   return {
     userId: session.user.id,
     companyId: session.user.companyId,
     branchId: session.user.branchId,
   };
+}
+
+function parseForm(formData: FormData) {
+  return quoteSchema.parse({
+    customerId: formData.get("customerId"),
+    mode: formData.get("mode"),
+    direction: formData.get("direction"),
+    origin: formData.get("origin") || undefined,
+    destination: formData.get("destination") || undefined,
+    incotermCode: formData.get("incotermCode") || undefined,
+    commodity: formData.get("commodity") || undefined,
+    validUntil: formData.get("validUntil") || undefined,
+    currencyCode: formData.get("currencyCode") || "USD",
+    internalNotes: formData.get("internalNotes") || undefined,
+    freightSell: formData.get("freightSell") || 0,
+    originChargesSell: formData.get("originChargesSell") || 0,
+    destinationChargesSell: formData.get("destinationChargesSell") || 0,
+    additionalChargesSell: formData.get("additionalChargesSell") || 0,
+    freightCost: formData.get("freightCost") || 0,
+    originChargesCost: formData.get("originChargesCost") || 0,
+    destinationChargesCost: formData.get("destinationChargesCost") || 0,
+    additionalChargesCost: formData.get("additionalChargesCost") || 0,
+  });
 }
 
 export async function createQuoteAction(
@@ -71,25 +99,7 @@ export async function createQuoteAction(
 ): Promise<QuoteActionState> {
   try {
     const ctx = await getQuoteContext("CREATE");
-
-    const chargesRaw = formData.get("charges");
-    let parsedCharges: Array<{ concept: string; chargeType: string; buyAmount: number; sellAmount: number }> = [];
-    if (chargesRaw && typeof chargesRaw === "string" && chargesRaw.length > 0) {
-      parsedCharges = JSON.parse(chargesRaw);
-    }
-
-    const parsed = quoteCreateSchema.parse({
-      customerId: formData.get("customerId"),
-      mode: formData.get("mode"),
-      direction: formData.get("direction"),
-      origin: formData.get("origin") || undefined,
-      destination: formData.get("destination") || undefined,
-      incotermCode: formData.get("incotermCode") || undefined,
-      validUntil: formData.get("validUntil") || undefined,
-      currencyCode: formData.get("currencyCode") || "USD",
-      internalNotes: formData.get("internalNotes") || undefined,
-      charges: parsedCharges,
-    });
+    const parsed = parseForm(formData);
 
     const customer = await prisma.customer.findFirst({
       where: { id: parsed.customerId, companyId: ctx.companyId },
@@ -98,7 +108,7 @@ export async function createQuoteAction(
     if (!customer) throw new Error("Customer not found for this company");
 
     const quoteNumber = await getNextQuoteNumber(ctx.companyId);
-    const totals = computeTotals(parsed.charges);
+    const totals = computeTotals(parsed);
 
     const validUntil = parsed.validUntil ? new Date(parsed.validUntil) : null;
     if (validUntil && Number.isNaN(validUntil.getTime())) {
@@ -114,25 +124,22 @@ export async function createQuoteAction(
         customerId: parsed.customerId,
         mode: parsed.mode,
         direction: parsed.direction,
-        origin: normalizeOptional(parsed.origin),
-        destination: normalizeOptional(parsed.destination),
-        incotermCode: normalizeOptional(parsed.incotermCode),
+        origin: norm(parsed.origin),
+        destination: norm(parsed.destination),
+        incotermCode: norm(parsed.incotermCode),
+        commodity: norm(parsed.commodity),
         validUntil,
         currencyCode: parsed.currencyCode,
-        internalNotes: normalizeOptional(parsed.internalNotes),
-        totalBuy: totals.totalBuy,
-        totalSell: totals.totalSell,
-        marginAmount: totals.marginAmount,
-        marginPct: totals.marginPct,
-        charges: {
-          create: parsed.charges.map((c) => ({
-            concept: c.concept,
-            chargeType: c.chargeType,
-            buyAmount: c.buyAmount,
-            sellAmount: c.sellAmount,
-            currencyCode: parsed.currencyCode,
-          })),
-        },
+        internalNotes: norm(parsed.internalNotes),
+        freightSell: parsed.freightSell,
+        originChargesSell: parsed.originChargesSell,
+        destinationChargesSell: parsed.destinationChargesSell,
+        additionalChargesSell: parsed.additionalChargesSell,
+        freightCost: parsed.freightCost,
+        originChargesCost: parsed.originChargesCost,
+        destinationChargesCost: parsed.destinationChargesCost,
+        additionalChargesCost: parsed.additionalChargesCost,
+        ...totals,
       },
     });
 
@@ -149,7 +156,6 @@ export async function createQuoteAction(
 
     revalidatePath("/quotes");
     revalidatePath("/dashboard");
-
     return { success: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
@@ -174,25 +180,12 @@ export async function updateQuoteAction(
     if (existing.status === "APPROVED") {
       throw new Error("Cannot edit an approved quote");
     }
-
-    const chargesRaw = formData.get("charges");
-    let parsedCharges: Array<{ concept: string; chargeType: string; buyAmount: number; sellAmount: number }> = [];
-    if (chargesRaw && typeof chargesRaw === "string" && chargesRaw.length > 0) {
-      parsedCharges = JSON.parse(chargesRaw);
+    if (existing.status === "REJECTED" || existing.status === "EXPIRED") {
+      throw new Error("Cannot edit a " + existing.status.toLowerCase() + " quote");
     }
 
-    const parsed = quoteCreateSchema.parse({
-      customerId: formData.get("customerId"),
-      mode: formData.get("mode"),
-      direction: formData.get("direction"),
-      origin: formData.get("origin") || undefined,
-      destination: formData.get("destination") || undefined,
-      incotermCode: formData.get("incotermCode") || undefined,
-      validUntil: formData.get("validUntil") || undefined,
-      currencyCode: formData.get("currencyCode") || "USD",
-      internalNotes: formData.get("internalNotes") || undefined,
-      charges: parsedCharges,
-    });
+    const parsed = parseForm(formData);
+    const totals = computeTotals(parsed);
 
     const customer = await prisma.customer.findFirst({
       where: { id: parsed.customerId, companyId: ctx.companyId },
@@ -200,40 +193,37 @@ export async function updateQuoteAction(
     });
     if (!customer) throw new Error("Customer not found for this company");
 
-    const totals = computeTotals(parsed.charges);
-
     const validUntil = parsed.validUntil ? new Date(parsed.validUntil) : null;
     if (validUntil && Number.isNaN(validUntil.getTime())) {
       throw new Error("Invalid validity date");
     }
 
-    await prisma.quoteCharge.deleteMany({ where: { quoteId: id } });
+    const statusReset = existing.status === "SENT" ? "DRAFT" : existing.status;
 
-    const updated = await prisma.quote.update({
+    await prisma.quote.update({
       where: { id },
       data: {
+        status: statusReset,
         customerId: parsed.customerId,
         mode: parsed.mode,
         direction: parsed.direction,
-        origin: normalizeOptional(parsed.origin),
-        destination: normalizeOptional(parsed.destination),
-        incotermCode: normalizeOptional(parsed.incotermCode),
+        origin: norm(parsed.origin),
+        destination: norm(parsed.destination),
+        incotermCode: norm(parsed.incotermCode),
+        commodity: norm(parsed.commodity),
         validUntil,
         currencyCode: parsed.currencyCode,
-        internalNotes: normalizeOptional(parsed.internalNotes),
-        totalBuy: totals.totalBuy,
-        totalSell: totals.totalSell,
-        marginAmount: totals.marginAmount,
-        marginPct: totals.marginPct,
-        charges: {
-          create: parsed.charges.map((c) => ({
-            concept: c.concept,
-            chargeType: c.chargeType,
-            buyAmount: c.buyAmount,
-            sellAmount: c.sellAmount,
-            currencyCode: parsed.currencyCode,
-          })),
-        },
+        internalNotes: norm(parsed.internalNotes),
+        freightSell: parsed.freightSell,
+        originChargesSell: parsed.originChargesSell,
+        destinationChargesSell: parsed.destinationChargesSell,
+        additionalChargesSell: parsed.additionalChargesSell,
+        freightCost: parsed.freightCost,
+        originChargesCost: parsed.originChargesCost,
+        destinationChargesCost: parsed.destinationChargesCost,
+        additionalChargesCost: parsed.additionalChargesCost,
+        ...totals,
+        sentAt: statusReset === "DRAFT" ? null : existing.sentAt,
       },
     });
 
@@ -241,18 +231,16 @@ export async function updateQuoteAction(
       data: {
         companyId: ctx.companyId,
         entityType: "QUOTE",
-        entityId: updated.id,
+        entityId: id,
         action: "UPDATE",
         actorId: ctx.userId,
-        beforeJson: existing,
-        afterJson: updated,
+        afterJson: { revertedToDraft: statusReset === "DRAFT" && existing.status === "SENT" },
       },
     });
 
     revalidatePath("/quotes");
     revalidatePath(`/quotes/${id}`);
     revalidatePath("/dashboard");
-
     return { success: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
@@ -271,13 +259,9 @@ export async function sendQuoteAction(
 
     const quote = await prisma.quote.findFirst({
       where: { id, companyId: ctx.companyId },
-      include: { charges: true },
     });
     if (!quote) throw new Error("Quote not found");
-
-    if (quote.status !== "DRAFT") {
-      throw new Error("Only draft quotes can be sent");
-    }
+    if (quote.status !== "DRAFT") throw new Error("Only draft quotes can be sent");
 
     await prisma.quote.update({
       where: { id },
@@ -286,11 +270,8 @@ export async function sendQuoteAction(
 
     await prisma.activityLog.create({
       data: {
-        companyId: ctx.companyId,
-        entityType: "QUOTE",
-        entityId: id,
-        action: "UPDATE",
-        actorId: ctx.userId,
+        companyId: ctx.companyId, entityType: "QUOTE", entityId: id,
+        action: "UPDATE", actorId: ctx.userId,
         afterJson: { action: "SENT" },
       },
     });
@@ -298,11 +279,9 @@ export async function sendQuoteAction(
     revalidatePath("/quotes");
     revalidatePath(`/quotes/${id}`);
     revalidatePath("/dashboard");
-
     return { success: true };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
-    return { success: false, error: message };
+    return { success: false, error: error instanceof Error ? error.message : "Unknown error" };
   }
 }
 
@@ -317,41 +296,32 @@ export async function approveQuoteAction(
 
     const quote = await prisma.quote.findFirst({
       where: { id, companyId: ctx.companyId },
-      include: { charges: true },
     });
     if (!quote) throw new Error("Quote not found");
+    if (quote.status !== "SENT") throw new Error("Only sent quotes can be approved");
 
-    if (quote.status !== "SENT") {
-      throw new Error("Only sent quotes can be approved");
-    }
-
-    if (quote.charges.length === 0) {
-      throw new Error("Cannot approve a quote without pricing");
+    if (Number(quote.totalSell) === 0) {
+      throw new Error("Cannot approve a quote without sell pricing");
     }
 
     await prisma.quote.update({
       where: { id },
-      data: { status: "APPROVED", approvedAt: new Date() },
+      data: { status: "APPROVED", approvedAt: new Date(), approvedByUserId: ctx.userId },
     });
 
     await prisma.activityLog.create({
       data: {
-        companyId: ctx.companyId,
-        entityType: "QUOTE",
-        entityId: id,
-        action: "APPROVE",
-        actorId: ctx.userId,
+        companyId: ctx.companyId, entityType: "QUOTE", entityId: id,
+        action: "APPROVE", actorId: ctx.userId,
       },
     });
 
     revalidatePath("/quotes");
     revalidatePath(`/quotes/${id}`);
     revalidatePath("/dashboard");
-
     return { success: true };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
-    return { success: false, error: message };
+    return { success: false, error: error instanceof Error ? error.message : "Unknown error" };
   }
 }
 
@@ -368,10 +338,7 @@ export async function rejectQuoteAction(
       where: { id, companyId: ctx.companyId },
     });
     if (!quote) throw new Error("Quote not found");
-
-    if (quote.status !== "SENT") {
-      throw new Error("Only sent quotes can be rejected");
-    }
+    if (quote.status !== "SENT") throw new Error("Only sent quotes can be rejected");
 
     await prisma.quote.update({
       where: { id },
@@ -380,11 +347,8 @@ export async function rejectQuoteAction(
 
     await prisma.activityLog.create({
       data: {
-        companyId: ctx.companyId,
-        entityType: "QUOTE",
-        entityId: id,
-        action: "UPDATE",
-        actorId: ctx.userId,
+        companyId: ctx.companyId, entityType: "QUOTE", entityId: id,
+        action: "UPDATE", actorId: ctx.userId,
         afterJson: { action: "REJECTED" },
       },
     });
@@ -392,11 +356,9 @@ export async function rejectQuoteAction(
     revalidatePath("/quotes");
     revalidatePath(`/quotes/${id}`);
     revalidatePath("/dashboard");
-
     return { success: true };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
-    return { success: false, error: message };
+    return { success: false, error: error instanceof Error ? error.message : "Unknown error" };
   }
 }
 
@@ -413,7 +375,6 @@ export async function expireQuoteAction(
       where: { id, companyId: ctx.companyId },
     });
     if (!quote) throw new Error("Quote not found");
-
     if (quote.status !== "DRAFT" && quote.status !== "SENT") {
       throw new Error("Only draft or sent quotes can be expired");
     }
@@ -426,11 +387,9 @@ export async function expireQuoteAction(
     revalidatePath("/quotes");
     revalidatePath(`/quotes/${id}`);
     revalidatePath("/dashboard");
-
     return { success: true };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
-    return { success: false, error: message };
+    return { success: false, error: error instanceof Error ? error.message : "Unknown error" };
   }
 }
 
@@ -438,18 +397,12 @@ export async function convertQuoteToShipmentAction(
   _prevState: QuoteActionState,
   formData: FormData,
 ): Promise<QuoteActionState> {
+  let shipmentId: string | null = null;
   try {
     const session = await getServerSession(authOptions);
-    if (!session?.user?.id || !session.user.companyId) {
-      throw new Error("Unauthorized");
-    }
-
-    if (!hasPermission(session.user.role, "QUOTES", "UPDATE")) {
-      throw new Error("Insufficient permissions for quotes");
-    }
-    if (!hasPermission(session.user.role, "SHIPMENTS", "CREATE")) {
-      throw new Error("Insufficient permissions to create shipments");
-    }
+    if (!session?.user?.id || !session.user.companyId) throw new Error("Unauthorized");
+    if (!hasPermission(session.user.role, "QUOTES", "UPDATE")) throw new Error("Insufficient permissions for quotes");
+    if (!hasPermission(session.user.role, "SHIPMENTS", "CREATE")) throw new Error("Insufficient permissions to create shipments");
 
     const ctx = {
       userId: session.user.id,
@@ -462,35 +415,21 @@ export async function convertQuoteToShipmentAction(
 
     const quote = await prisma.quote.findFirst({
       where: { id, companyId: ctx.companyId },
-      include: {
-        customer: { select: { id: true } },
-        shipment: { select: { id: true } },
-      },
+      include: { shipment: { select: { id: true } } },
     });
     if (!quote) throw new Error("Quote not found");
-
-    if (quote.status !== "APPROVED") {
-      throw new Error("Only approved quotes can be converted to shipments");
-    }
-
-    if (quote.shipment) {
-      throw new Error("Quote has already been converted to a shipment");
-    }
+    if (quote.status !== "APPROVED") throw new Error("Only approved quotes can be converted to shipments");
+    if (quote.shipment) throw new Error("Quote has already been converted to a shipment");
 
     const year = new Date().getFullYear();
     const lastShipment = await prisma.shipment.findFirst({
-      where: {
-        companyId: ctx.companyId,
-        shipmentNumber: { startsWith: `SHP-${year}-` },
-      },
+      where: { companyId: ctx.companyId, shipmentNumber: { startsWith: `SHP-${year}-` } },
       orderBy: { shipmentNumber: "desc" },
       select: { shipmentNumber: true },
     });
-
     let nextSeq = 1;
     if (lastShipment) {
-      const lastNum = parseInt(lastShipment.shipmentNumber.replace(`SHP-${year}-`, ""), 10);
-      nextSeq = lastNum + 1;
+      nextSeq = parseInt(lastShipment.shipmentNumber.replace(`SHP-${year}-`, ""), 10) + 1;
     }
     const shipmentNumber = `SHP-${year}-${String(nextSeq).padStart(4, "0")}`;
 
@@ -506,28 +445,23 @@ export async function convertQuoteToShipmentAction(
         direction: quote.direction,
         status: "DRAFT",
         incotermCode: quote.incotermCode ?? undefined,
-        notes: `Converted from quote ${quote.quoteNumber}`,
+        commodity: quote.commodity ?? undefined,
+        notes: `Converted from quote ${quote.quoteNumber}. Origin: ${quote.origin ?? "N/A"}, Destination: ${quote.destination ?? "N/A"}.`,
       },
     });
+    shipmentId = shipment.id;
 
     await prisma.activityLog.create({
       data: {
-        companyId: ctx.companyId,
-        entityType: "QUOTE",
-        entityId: quote.id,
-        action: "CONVERT",
-        actorId: ctx.userId,
+        companyId: ctx.companyId, entityType: "QUOTE", entityId: quote.id,
+        action: "CONVERT", actorId: ctx.userId,
         afterJson: { shipmentId: shipment.id, shipmentNumber },
       },
     });
-
     await prisma.activityLog.create({
       data: {
-        companyId: ctx.companyId,
-        entityType: "SHIPMENT",
-        entityId: shipment.id,
-        action: "CREATE",
-        actorId: ctx.userId,
+        companyId: ctx.companyId, entityType: "SHIPMENT", entityId: shipment.id,
+        action: "CREATE", actorId: ctx.userId,
         afterJson: { fromQuote: quote.quoteNumber, status: "DRAFT" },
       },
     });
@@ -536,12 +470,11 @@ export async function convertQuoteToShipmentAction(
     revalidatePath(`/quotes/${id}`);
     revalidatePath("/shipments");
     revalidatePath("/dashboard");
-
-    return { success: true };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
-    return { success: false, error: message };
+    return { success: false, error: error instanceof Error ? error.message : "Unknown error" };
   }
+
+  redirect(`/shipments/${shipmentId}`);
 }
 
 export async function deleteQuoteDirectAction(formData: FormData): Promise<void> {
@@ -560,11 +493,8 @@ export async function deleteQuoteDirectAction(formData: FormData): Promise<void>
 
   await prisma.activityLog.create({
     data: {
-      companyId: ctx.companyId,
-      entityType: "QUOTE",
-      entityId: id,
-      action: "DELETE",
-      actorId: ctx.userId,
+      companyId: ctx.companyId, entityType: "QUOTE", entityId: id,
+      action: "DELETE", actorId: ctx.userId,
     },
   });
 

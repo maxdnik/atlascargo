@@ -16,7 +16,7 @@ export default async function EditQuotePage({ params }: { params: Params }) {
 
   if (!quote) notFound();
 
-  if (quote.status === "APPROVED") {
+  if (quote.status === "APPROVED" || quote.status === "REJECTED" || quote.status === "EXPIRED") {
     redirect(`/quotes/${id}`);
   }
 
@@ -29,11 +29,11 @@ export default async function EditQuotePage({ params }: { params: Params }) {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-2xl font-semibold text-zinc-900">
-          Edit {quote.quoteNumber}
-        </h1>
+        <h1 className="text-2xl font-semibold text-zinc-900">Edit {quote.quoteNumber}</h1>
         <p className="text-sm text-zinc-600">
-          Update quote details and pricing.
+          {quote.status === "SENT"
+            ? "Editing will revert this quote back to DRAFT status."
+            : "Update quote details and pricing."}
         </p>
       </div>
       <QuoteForm
@@ -46,18 +46,21 @@ export default async function EditQuotePage({ params }: { params: Params }) {
           origin: quote.origin,
           destination: quote.destination,
           incotermCode: quote.incotermCode,
+          commodity: quote.commodity,
           validUntil: quote.validUntil?.toISOString() ?? null,
           currencyCode: quote.currencyCode,
           internalNotes: quote.internalNotes,
-          charges: quote.charges.map((c) => ({
-            concept: c.concept,
-            chargeType: c.chargeType,
-            buyAmount: c.buyAmount,
-            sellAmount: c.sellAmount,
-          })),
+          freightSell: Number(quote.freightSell),
+          originChargesSell: Number(quote.originChargesSell),
+          destinationChargesSell: Number(quote.destinationChargesSell),
+          additionalChargesSell: Number(quote.additionalChargesSell),
+          freightCost: Number(quote.freightCost),
+          originChargesCost: Number(quote.originChargesCost),
+          destinationChargesCost: Number(quote.destinationChargesCost),
+          additionalChargesCost: Number(quote.additionalChargesCost),
         }}
         customers={customers}
-        submitLabel="Update Quote"
+        submitLabel={quote.status === "SENT" ? "Save & Revert to Draft" : "Update Quote"}
       />
     </div>
   );
