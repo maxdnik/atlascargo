@@ -485,6 +485,57 @@ async function main() {
     ],
   });
 
+  await prisma.shipmentDocument.upsert({
+    where: { id: "doc_air_0001_hawb" },
+    update: {},
+    create: {
+      id: "doc_air_0001_hawb",
+      shipmentId: shipmentAirImport.id,
+      docType: "HAWB",
+      fileName: "hawb-045-77881122.pdf",
+      referenceNumber: "HAWB-045-77881122",
+      issueDate: new Date("2026-04-05T09:00:00.000Z"),
+      uploadedById: adminUser.id,
+      version: 1,
+      status: "VERIFIED",
+      notes: "Original airway bill verified by operations.",
+    },
+  });
+
+  await prisma.shipmentDocument.upsert({
+    where: { id: "doc_air_0001_invoice" },
+    update: {},
+    create: {
+      id: "doc_air_0001_invoice",
+      shipmentId: shipmentAirImport.id,
+      docType: "COMMERCIAL_INVOICE",
+      fileName: "acme-commercial-invoice-45021.pdf",
+      referenceNumber: "INV-45021",
+      issueDate: new Date("2026-04-04T12:00:00.000Z"),
+      uploadedById: adminUser.id,
+      version: 2,
+      status: "RECEIVED",
+      notes: "Customer re-uploaded corrected values in version 2.",
+    },
+  });
+
+  await prisma.shipmentDocument.upsert({
+    where: { id: "doc_ocean_0002_hbl" },
+    update: {},
+    create: {
+      id: "doc_ocean_0002_hbl",
+      shipmentId: shipmentOceanExport.id,
+      docType: "HBL",
+      fileName: "hbl-arbue-cnsha-00921.pdf",
+      referenceNumber: "HBL-ARBUE-CNSHA-00921",
+      issueDate: new Date("2026-04-11T15:00:00.000Z"),
+      uploadedById: adminUser.id,
+      version: 1,
+      status: "PENDING",
+      notes: "Pending final signature from shipper.",
+    },
+  });
+
   await prisma.revenue.upsert({
     where: { id: "rev_air_0001_main" },
     update: {},
@@ -497,12 +548,11 @@ async function main() {
       concept: "International Air Freight",
       amount: "2450.00",
       currencyCode: "USD",
-      fxRate: "880.000000",
+      exchangeRate: "880.000000",
       amountBase: "2156000.00",
       dueDate: new Date("2026-04-20T00:00:00.000Z"),
-      status: "POSTED",
-      invoiceNumber: "INV-AR-2026-00112",
-      postedAt: new Date("2026-04-06T09:00:00.000Z"),
+      status: "PAID",
+      notes: "Collected with invoice INV-AR-2026-00112.",
     },
   });
 
@@ -518,10 +568,11 @@ async function main() {
       concept: "Ocean Freight + Origin THC",
       amount: "6200.00",
       currencyCode: "USD",
-      fxRate: "882.500000",
+      exchangeRate: "882.500000",
       amountBase: "5471500.00",
       dueDate: new Date("2026-04-25T00:00:00.000Z"),
-      status: "DRAFT",
+      status: "INVOICED",
+      notes: "Invoice issued; awaiting payment.",
     },
   });
 
@@ -537,12 +588,12 @@ async function main() {
       concept: "Airline Cost",
       amount: "1890.00",
       currencyCode: "USD",
-      fxRate: "880.000000",
+      supplierName: carrierAir.name,
+      exchangeRate: "880.000000",
       amountBase: "1663200.00",
       dueDate: new Date("2026-04-18T00:00:00.000Z"),
-      status: "POSTED",
-      invoiceNumber: "LH-INV-55619",
-      postedAt: new Date("2026-04-06T09:15:00.000Z"),
+      status: "PAID",
+      notes: "Airline invoice LH-INV-55619 paid.",
     },
   });
 
@@ -555,13 +606,15 @@ async function main() {
       branchId: branchBA.id,
       shipmentId: shipmentOceanExport.id,
       supplierId: carrierOcean.id,
+      supplierName: carrierOcean.name,
       concept: "Ocean Carrier Buy Rate",
       amount: "4980.00",
       currencyCode: "USD",
-      fxRate: "882.500000",
+      exchangeRate: "882.500000",
       amountBase: "4394850.00",
       dueDate: new Date("2026-04-22T00:00:00.000Z"),
-      status: "DRAFT",
+      status: "INVOICED",
+      notes: "Carrier invoice received and under payment process.",
     },
   });
 
@@ -574,13 +627,15 @@ async function main() {
       branchId: branchBA.id,
       shipmentId: shipmentOceanExport.id,
       supplierId: supplierCustoms.id,
+      supplierName: supplierCustoms.name,
       concept: "Documentation and Customs Coordination",
       amount: "420.00",
       currencyCode: "USD",
-      fxRate: "882.500000",
+      exchangeRate: "882.500000",
       amountBase: "370650.00",
       dueDate: new Date("2026-04-26T00:00:00.000Z"),
-      status: "DRAFT",
+      status: "PENDING",
+      notes: "Pending customs broker invoice confirmation.",
     },
   });
 

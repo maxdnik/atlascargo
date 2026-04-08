@@ -3,6 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import {
+  DocumentRecordStatus,
+  FinancialRecordStatus,
   MilestoneStatus,
   QuoteStatus,
   ShipmentStatus,
@@ -81,6 +83,10 @@ export type ShipmentActionState = {
   error?: string;
 };
 
+const BASE_CURRENCY = "USD";
+const financialStatusOptions = Object.values(FinancialRecordStatus);
+const documentStatusOptions = Object.values(DocumentRecordStatus);
+
 const defaultMilestones: Array<{ code: string; label: string; isCritical: boolean }> = [
   { code: "QUOTE_APPROVED", label: "Quote Approved", isCritical: false },
   { code: "BOOKING_REQUESTED", label: "Booking Requested", isCritical: true },
@@ -108,6 +114,41 @@ function toDate(value?: string) {
     throw new Error("Invalid date value");
   }
   return date;
+}
+
+function toDecimal(value?: string | number | null) {
+  if (value === undefined || value === null) return null;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw new Error("Invalid numeric value");
+    }
+    return value;
+  }
+  const normalized = String(value).trim();
+  if (!normalized) return null;
+  const parsed = Number(normalized);
+  if (!Number.isFinite(parsed)) {
+    throw new Error("Invalid numeric value");
+  }
+  return parsed;
+}
+
+function resolveAmountBase({
+  amount,
+  currencyCode,
+  exchangeRate,
+}: {
+  amount: number;
+  currencyCode: string;
+  exchangeRate: number | null;
+}) {
+  if (currencyCode === BASE_CURRENCY) {
+    return amount;
+  }
+  if (!exchangeRate || exchangeRate <= 0) {
+    throw new Error(`Exchange rate is required for ${currencyCode}`);
+  }
+  return amount * exchangeRate;
 }
 
 function validateShipmentDates({
@@ -736,6 +777,400 @@ const milestoneUpdateSchema = z.object({
   status: z.nativeEnum(MilestoneStatus).optional(),
   notes: z.string().max(600).optional(),
 });
+
+const shipmentDocumentSchema = z.object({
+  id: z.string().optional(),
+  shipmentId: z.string().min(1),
+  docType: z.string().min(1).max(40),
+  fileName: z.string().min(2).max(180),
+  referenceNumber: z.string().max(80).optional(),
+  issueDate: z.string().optional(),
+  version: z.coerce.number().int().min(1).max(100).optional(),
+  status: z.nativeEnum(DocumentRecordStatus),
+  notes: z.string().max(600).optional(),
+});
+
+const revenueSchema = z.object({
+  id: z.string().optional(),
+  shipmentId: z.string().min(1),
+  concept: z.string().min(2).max(160),
+  amount: z.coerce.number().positive().max(100_000_000),
+  currencyCode: z.enum(["USD", "EUR", "ARS"]),
+  exchangeRate: z.coerce.number().positive().max(100_000).optional(),
+  dueDate: z.string().optional(),
+  status: z.nativeEnum(FinancialRecordStatus),
+  notes: z.string().max(600).optional(),
+});
+
+const expenseSchema = z.object({
+  id: z.string().optional(),
+  shipmentId: z.string().min(1),
+  supplierName: z.string().min(2).max(180),
+  concept: z.string().min(2).max(160),
+  amount: z.coerce.number().positive().max(100_000_000),
+  currencyCode: z.enum(["USD", "EUR", "ARS"]),
+  exchangeRate: z.coerce.number().positive().max(100_000).optional(),
+  dueDate: z.string().optional(),
+  status: z.nativeEnum(FinancialRecordStatus),
+  notes: z.string().max(600).optional(),
+});
+
+function parseDocumentType(value: FormDataEntryValue | null) {
+  const normalized = String(value ?? "").trim().toUpperCase();
+  const allowed = [
+    "COMMERCIAL_INVOICE",
+    "PACKING_LIST",
+    "HBL",
+    "MBL",
+    "HAWB",
+    "MAWB",
+    "CERTIFICATE",
+    "PERMIT",
+    "POD",
+    "OTHER",
+  ];
+  if (!allowed.includes(normalized)) {
+    throw new Error("Invalid document type");
+  }
+  return normalized as z.infer<typeof shipmentDocumentSchema>["docType"];
+}
+
+function parseFinancialStatus(value: FormDataEntryValue | null) {
+  const normalized = String(value ?? "").trim().toUpperCase();
+  if (!financialStatusOptions.includes(normalized as FinancialRecordStatus)) {
+    throw new Error("Invalid financial status");
+  }
+  return normalized as FinancialRecordStatus;
+}
+
+function parseDocumentStatus(value: FormDataEntryValue | null) {
+  const normalized = String(value ?? "").trim().toUpperCase();
+  if (!documentStatusOptions.includes(normalized as DocumentRecordStatus)) {
+    throw new Error("Invalid document status");
+  }
+  return normalized as DocumentRecordStatus;
+}
+
+async function assertShipmentAccess(companyId: string, shipmentId: string) {
+  const shipment = await prisma.shipment.findFirst({
+    where: {
+      id: shipmentId,
+      companyId,
+    },
+    select: {
+      id: true,
+      customerId: true,
+    },
+  });
+  if (!shipment) {
+    throw new Error("Shipment not found");
+  }
+  return shipment;
+}
+
+export async function upsertShipmentDocumentAction(
+  _prevState: ShipmentActionState,
+  formData: FormData,
+): Promise<ShipmentActionState> {
+  try {
+    const ctx = await getContext("SHIPMENTS", "UPDATE");
+    const parsed = shipmentDocumentSchema.parse({
+      id: formData.get("id") || undefined,
+      shipmentId: formData.get("shipmentId"),
+      docType: parseDocumentType(formData.get("docType")),
+      fileName: formData.get("fileName"),
+      referenceNumber: formData.get("referenceNumber") || undefined,
+      issueDate: String(formData.get("issueDate") || ""),
+      version: formData.get("version") || undefined,
+      status: parseDocumentStatus(formData.get("status")),
+      notes: formData.get("notes") || undefined,
+    });
+
+    const shipment = await assertShipmentAccess(ctx.companyId, parsed.shipmentId);
+    const issueDate = toDate(parsed.issueDate);
+    const payload = {
+      shipmentId: shipment.id,
+      docType: parsed.docType,
+      fileName: parsed.fileName.trim(),
+      referenceNumber: normalizeOptional(parsed.referenceNumber),
+      issueDate,
+      version: parsed.version ?? 1,
+      status: parsed.status,
+      notes: normalizeOptional(parsed.notes),
+      uploadedById: ctx.userId,
+    };
+
+    if (parsed.id) {
+      const existing = await prisma.shipmentDocument.findFirst({
+        where: {
+          id: parsed.id,
+          shipment: { companyId: ctx.companyId },
+        },
+        select: { id: true },
+      });
+      if (!existing) {
+        throw new Error("Document not found");
+      }
+      await prisma.shipmentDocument.update({
+        where: { id: existing.id },
+        data: payload,
+      });
+    } else {
+      await prisma.shipmentDocument.create({ data: payload });
+    }
+
+    revalidatePath(`/shipments/${shipment.id}`);
+    revalidatePath("/shipments");
+    return { success: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return { success: false, error: message };
+  }
+}
+
+export async function deleteShipmentDocumentAction(
+  _prevState: ShipmentActionState,
+  formData: FormData,
+): Promise<ShipmentActionState> {
+  try {
+    const ctx = await getContext("SHIPMENTS", "UPDATE");
+    const id = String(formData.get("id") ?? "").trim();
+    if (!id) {
+      throw new Error("Document id is required");
+    }
+
+    const existing = await prisma.shipmentDocument.findFirst({
+      where: {
+        id,
+        shipment: { companyId: ctx.companyId },
+      },
+      select: {
+        id: true,
+        shipmentId: true,
+      },
+    });
+    if (!existing) {
+      throw new Error("Document not found");
+    }
+
+    await prisma.shipmentDocument.delete({ where: { id: existing.id } });
+    revalidatePath(`/shipments/${existing.shipmentId}`);
+    revalidatePath("/shipments");
+    return { success: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return { success: false, error: message };
+  }
+}
+
+export async function upsertRevenueAction(
+  _prevState: ShipmentActionState,
+  formData: FormData,
+): Promise<ShipmentActionState> {
+  try {
+    const ctx = await getContext("SHIPMENTS", "UPDATE");
+    const parsed = revenueSchema.parse({
+      id: formData.get("id") || undefined,
+      shipmentId: formData.get("shipmentId"),
+      concept: formData.get("concept"),
+      amount: formData.get("amount"),
+      currencyCode: formData.get("currencyCode"),
+      exchangeRate: formData.get("exchangeRate") || undefined,
+      dueDate: String(formData.get("dueDate") || ""),
+      status: parseFinancialStatus(formData.get("status")),
+      notes: formData.get("notes") || undefined,
+    });
+
+    const shipment = await assertShipmentAccess(ctx.companyId, parsed.shipmentId);
+    const dueDate = toDate(parsed.dueDate);
+    const exchangeRate = toDecimal(parsed.exchangeRate);
+    const amountBase = resolveAmountBase({
+      amount: parsed.amount,
+      currencyCode: parsed.currencyCode,
+      exchangeRate,
+    });
+    const payload = {
+      companyId: ctx.companyId,
+      branchId: ctx.branchId ?? undefined,
+      shipmentId: shipment.id,
+      customerId: shipment.customerId,
+      concept: parsed.concept.trim(),
+      amount: parsed.amount,
+      currencyCode: parsed.currencyCode,
+      exchangeRate,
+      amountBase,
+      dueDate,
+      status: parsed.status,
+      notes: normalizeOptional(parsed.notes),
+    };
+
+    if (parsed.id) {
+      const existing = await prisma.revenue.findFirst({
+        where: {
+          id: parsed.id,
+          companyId: ctx.companyId,
+        },
+        select: { id: true },
+      });
+      if (!existing) {
+        throw new Error("Revenue record not found");
+      }
+      await prisma.revenue.update({
+        where: { id: existing.id },
+        data: payload,
+      });
+    } else {
+      await prisma.revenue.create({ data: payload });
+    }
+
+    revalidatePath(`/shipments/${shipment.id}`);
+    revalidatePath("/shipments");
+    return { success: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return { success: false, error: message };
+  }
+}
+
+export async function deleteRevenueAction(
+  _prevState: ShipmentActionState,
+  formData: FormData,
+): Promise<ShipmentActionState> {
+  try {
+    const ctx = await getContext("SHIPMENTS", "UPDATE");
+    const id = String(formData.get("id") ?? "").trim();
+    if (!id) {
+      throw new Error("Revenue id is required");
+    }
+
+    const existing = await prisma.revenue.findFirst({
+      where: {
+        id,
+        companyId: ctx.companyId,
+      },
+      select: {
+        id: true,
+        shipmentId: true,
+      },
+    });
+    if (!existing) {
+      throw new Error("Revenue record not found");
+    }
+
+    await prisma.revenue.delete({ where: { id: existing.id } });
+    revalidatePath(`/shipments/${existing.shipmentId}`);
+    revalidatePath("/shipments");
+    return { success: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return { success: false, error: message };
+  }
+}
+
+export async function upsertExpenseAction(
+  _prevState: ShipmentActionState,
+  formData: FormData,
+): Promise<ShipmentActionState> {
+  try {
+    const ctx = await getContext("SHIPMENTS", "UPDATE");
+    const parsed = expenseSchema.parse({
+      id: formData.get("id") || undefined,
+      shipmentId: formData.get("shipmentId"),
+      supplierName: formData.get("supplierName"),
+      concept: formData.get("concept"),
+      amount: formData.get("amount"),
+      currencyCode: formData.get("currencyCode"),
+      exchangeRate: formData.get("exchangeRate") || undefined,
+      dueDate: String(formData.get("dueDate") || ""),
+      status: parseFinancialStatus(formData.get("status")),
+      notes: formData.get("notes") || undefined,
+    });
+
+    const shipment = await assertShipmentAccess(ctx.companyId, parsed.shipmentId);
+    const dueDate = toDate(parsed.dueDate);
+    const exchangeRate = toDecimal(parsed.exchangeRate);
+    const amountBase = resolveAmountBase({
+      amount: parsed.amount,
+      currencyCode: parsed.currencyCode,
+      exchangeRate,
+    });
+    const payload = {
+      companyId: ctx.companyId,
+      branchId: ctx.branchId ?? undefined,
+      shipmentId: shipment.id,
+      supplierName: parsed.supplierName.trim(),
+      concept: parsed.concept.trim(),
+      amount: parsed.amount,
+      currencyCode: parsed.currencyCode,
+      exchangeRate,
+      amountBase,
+      dueDate,
+      status: parsed.status,
+      notes: normalizeOptional(parsed.notes),
+    };
+
+    if (parsed.id) {
+      const existing = await prisma.expense.findFirst({
+        where: {
+          id: parsed.id,
+          companyId: ctx.companyId,
+        },
+        select: { id: true },
+      });
+      if (!existing) {
+        throw new Error("Expense record not found");
+      }
+      await prisma.expense.update({
+        where: { id: existing.id },
+        data: payload,
+      });
+    } else {
+      await prisma.expense.create({ data: payload });
+    }
+
+    revalidatePath(`/shipments/${shipment.id}`);
+    revalidatePath("/shipments");
+    return { success: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return { success: false, error: message };
+  }
+}
+
+export async function deleteExpenseAction(
+  _prevState: ShipmentActionState,
+  formData: FormData,
+): Promise<ShipmentActionState> {
+  try {
+    const ctx = await getContext("SHIPMENTS", "UPDATE");
+    const id = String(formData.get("id") ?? "").trim();
+    if (!id) {
+      throw new Error("Expense id is required");
+    }
+
+    const existing = await prisma.expense.findFirst({
+      where: {
+        id,
+        companyId: ctx.companyId,
+      },
+      select: {
+        id: true,
+        shipmentId: true,
+      },
+    });
+    if (!existing) {
+      throw new Error("Expense record not found");
+    }
+
+    await prisma.expense.delete({ where: { id: existing.id } });
+    revalidatePath(`/shipments/${existing.shipmentId}`);
+    revalidatePath("/shipments");
+    return { success: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return { success: false, error: message };
+  }
+}
 
 export async function upsertMilestoneAction(
   _prevState: ShipmentActionState,

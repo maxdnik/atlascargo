@@ -113,6 +113,15 @@ export async function getShipmentById(companyId: string, id: string) {
       milestones: {
         orderBy: [{ expectedAt: "asc" }, { createdAt: "asc" }],
       },
+      documents: {
+        orderBy: [{ uploadedAt: "desc" }, { createdAt: "desc" }],
+      },
+      revenues: {
+        orderBy: [{ createdAt: "desc" }],
+      },
+      expenses: {
+        orderBy: [{ createdAt: "desc" }],
+      },
       _count: {
         select: {
           milestones: true,

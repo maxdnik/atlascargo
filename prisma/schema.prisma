@@ -140,8 +140,19 @@ enum DocumentType {
   CERTIFICATE
   PERMIT
   POD
-  INTERNAL
   OTHER
+}
+
+enum DocumentRecordStatus {
+  PENDING
+  RECEIVED
+  VERIFIED
+}
+
+enum FinancialRecordStatus {
+  PENDING
+  INVOICED
+  PAID
 }
 
 enum NotificationLevel {
@@ -705,48 +716,42 @@ model ShipmentMilestone {
 }
 
 model ShipmentDocument {
-  id           String       @id @default(cuid())
-  shipmentId   String
-  docType      DocumentType
-  title        String
-  fileName     String?
-  mimeType     String?
-  storageKey   String?
-  fileUrl      String?
-  fileSize     Int?
-  version      Int          @default(1)
-  status       String?
-  isRequired   Boolean      @default(false)
-  isPublished  Boolean      @default(false)
-  comments     String?
-  uploadedById String?
-  uploadedAt   DateTime     @default(now())
-  createdAt    DateTime     @default(now())
-  updatedAt    DateTime     @updatedAt
+  id              String               @id @default(cuid())
+  shipmentId      String
+  docType         DocumentType
+  fileName        String
+  referenceNumber String?
+  issueDate       DateTime?
+  uploadedById    String?
+  uploadedAt      DateTime             @default(now())
+  version         Int                  @default(1)
+  status          DocumentRecordStatus @default(PENDING)
+  notes           String?
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
 
   shipment   Shipment @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
   uploadedBy User?    @relation("DocumentUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
 
-  @@index([shipmentId, docType, isRequired])
+  @@index([shipmentId, docType, status])
 }
 
 model Revenue {
-  id            String        @id @default(cuid())
-  companyId     String
-  branchId      String?
-  shipmentId    String
-  customerId    String
-  concept       String
-  amount        Decimal
-  currencyCode  String
-  fxRate        Decimal?
-  amountBase    Decimal?
-  dueDate       DateTime?
-  status        FinanceStatus @default(DRAFT)
-  invoiceNumber String?
-  postedAt      DateTime?
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
+  id           String                @id @default(cuid())
+  companyId    String
+  branchId     String?
+  shipmentId   String
+  customerId   String
+  concept      String
+  amount       Decimal
+  currencyCode String
+  exchangeRate Decimal?
+  amountBase   Decimal
+  dueDate      DateTime?
+  status       FinancialRecordStatus @default(PENDING)
+  notes        String?
+  createdAt    DateTime              @default(now())
+  updatedAt    DateTime              @updatedAt
 
   company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
   branch   Branch?   @relation(fields: [branchId], references: [id], onDelete: SetNull)
@@ -760,22 +765,22 @@ model Revenue {
 }
 
 model Expense {
-  id            String        @id @default(cuid())
-  companyId     String
-  branchId      String?
-  shipmentId    String
-  supplierId    String?
-  concept       String
-  amount        Decimal
-  currencyCode  String
-  fxRate        Decimal?
-  amountBase    Decimal?
-  dueDate       DateTime?
-  status        FinanceStatus @default(DRAFT)
-  invoiceNumber String?
-  postedAt      DateTime?
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
+  id           String                @id @default(cuid())
+  companyId    String
+  branchId     String?
+  shipmentId   String
+  supplierId   String?
+  supplierName String
+  concept      String
+  amount       Decimal
+  currencyCode String
+  exchangeRate Decimal?
+  amountBase   Decimal
+  dueDate      DateTime?
+  status       FinancialRecordStatus @default(PENDING)
+  notes        String?
+  createdAt    DateTime              @default(now())
+  updatedAt    DateTime              @updatedAt
 
   company  Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
   branch   Branch?          @relation(fields: [branchId], references: [id], onDelete: SetNull)
