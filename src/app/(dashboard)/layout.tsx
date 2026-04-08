@@ -85,6 +85,15 @@ export default async function DashboardLayout({
       section: "finance",
     });
   }
+  if (visibleModules.has(PermissionResource.REVENUE)) {
+    navItems.push({
+      id: "invoices",
+      href: "/invoices",
+      label: "Invoices",
+      icon: "finance",
+      section: "finance",
+    });
+  }
   if (visibleModules.has(PermissionResource.ADMIN)) {
     navItems.push({
       id: "admin",

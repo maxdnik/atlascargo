@@ -1,4 +1,4 @@
-import { FinanceStatus, FinancialRecordStatus, ShipmentStatus } from "@prisma/client";
+import { FinancialRecordStatus, InvoiceStatus, ShipmentStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 
 type ShipmentFinanceRecord = {
@@ -13,7 +13,7 @@ type ShipmentFinanceRecord = {
 type ForecastTransaction = {
   id: string;
   type: "INFLOW" | "OUTFLOW";
-  source: "AR_INVOICE" | "AP_INVOICE" | "AP_COST";
+  source: "AR_INVOICE" | "AP_COST";
   date: Date;
   amount: number;
   shipmentNumber: string;
@@ -53,6 +53,7 @@ export type ShipmentProfitabilityRow = {
 
 export type AccountsReceivableRow = {
   id: string;
+  invoiceId: string;
   customerId: string;
   customer: string;
   shipment: string;
@@ -60,8 +61,11 @@ export type AccountsReceivableRow = {
   amount: number;
   dueDate: Date | null;
   daysOverdue: number;
-  status: "PAID" | "OVERDUE" | "CANCELLED" | FinanceStatus;
+  status: "PAID" | "OVERDUE" | "CANCELLED" | InvoiceStatus;
   outstanding: number;
+  afipStatus: string | null;
+  afipCAE: string | null;
+  afipNumber: string | null;
 };
 
 export type AccountsPayableRow = {
@@ -71,7 +75,7 @@ export type AccountsPayableRow = {
   reference: string;
   amount: number;
   dueDate: Date | null;
-  status: "PAID" | "OVERDUE" | "CANCELLED" | FinanceStatus | FinancialRecordStatus;
+  status: "PAID" | "OVERDUE" | "CANCELLED" | InvoiceStatus | FinancialRecordStatus;
   outstanding: number;
 };
 
@@ -95,9 +99,27 @@ export type FinanceModuleData = {
   arCustomers: Array<{ id: string; name: string }>;
 };
 
-const COMPLETE_INVOICE_STATUSES = new Set<FinanceStatus>([
-  FinanceStatus.PAID,
-  FinanceStatus.CANCELLED,
+export type InvoiceArListRow = {
+  id: string;
+  invoiceNumber: string;
+  shipmentId: string;
+  shipmentNumber: string;
+  customerName: string;
+  currencyCode: string;
+  subtotal: number;
+  taxes: number;
+  total: number;
+  dueDate: Date | null;
+  issueDate: Date | null;
+  status: InvoiceStatus;
+  afipStatus: string | null;
+  afipCAE: string | null;
+  afipNumber: string | null;
+};
+
+const COMPLETE_INVOICE_STATUSES = new Set<InvoiceStatus>([
+  InvoiceStatus.PAID,
+  InvoiceStatus.CANCELLED,
 ]);
 
 function asNumber(value: unknown) {
@@ -165,27 +187,27 @@ function toMapRow(
 }
 
 function invoiceStatusLabel(
-  status: FinanceStatus,
+  status: InvoiceStatus,
   dueDate: Date | null,
   today: Date,
   outstanding: number,
-): "PAID" | "OVERDUE" | "CANCELLED" | FinanceStatus {
-  if (outstanding <= 0 || status === FinanceStatus.PAID) return "PAID";
-  if (status === FinanceStatus.CANCELLED) return "CANCELLED";
+): "PAID" | "OVERDUE" | "CANCELLED" | InvoiceStatus {
+  if (outstanding <= 0 || status === InvoiceStatus.PAID) return "PAID";
+  if (status === InvoiceStatus.CANCELLED) return "CANCELLED";
   if (dueDate && dayStart(dueDate) < dayStart(today)) return "OVERDUE";
   return status;
 }
 
 function payableStatusLabel(
-  status: FinancialRecordStatus | FinanceStatus,
+  status: FinancialRecordStatus | InvoiceStatus,
   dueDate: Date | null,
   today: Date,
   outstanding: number,
-): "PAID" | "OVERDUE" | "CANCELLED" | FinanceStatus | FinancialRecordStatus {
+): "PAID" | "OVERDUE" | "CANCELLED" | InvoiceStatus | FinancialRecordStatus {
   if (outstanding <= 0 || status === FinancialRecordStatus.PAID) {
     return "PAID";
   }
-  if (status === FinanceStatus.CANCELLED) return "CANCELLED";
+  if (status === InvoiceStatus.CANCELLED) return "CANCELLED";
   if (dueDate && dayStart(dueDate) < dayStart(today)) return "OVERDUE";
   return status;
 }
@@ -262,20 +284,22 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
     prisma.invoice.findMany({
       where: {
         companyId,
-        shipmentId: { not: null },
+        shipmentId: {
+          not: "",
+        },
       },
       select: {
         id: true,
-        number: true,
-        amount: true,
+        invoiceNumber: true,
         status: true,
         dueDate: true,
         issueDate: true,
-        invoiceType: true,
+        total: true,
+        afipStatus: true,
+        afipCAE: true,
+        afipNumber: true,
         customerId: true,
-        supplierId: true,
         customer: { select: { id: true, legalName: true } },
-        supplier: { select: { name: true } },
         shipment: { select: { shipmentNumber: true } },
         payments: {
           select: {
@@ -297,7 +321,7 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
         amount: true,
         revenueId: true,
         expenseId: true,
-        invoice: { select: { customerId: true, supplierId: true } },
+        invoice: { select: { customerId: true } },
       },
     }),
   ]);
@@ -360,24 +384,30 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
     })
     .sort((a, b) => a.margin - b.margin);
 
-  const accountsReceivable = invoices
+  const shipmentInvoices = invoices.filter((invoice) => Boolean(invoice.shipment));
+
+  const accountsReceivable = shipmentInvoices
     .filter((invoice) => invoice.customerId && invoice.customer)
     .map<AccountsReceivableRow>((invoice) => {
-      const amount = asNumber(invoice.amount);
+      const amount = asNumber(invoice.total);
       const paid = invoice.payments.reduce((sum, payment) => sum + asNumber(payment.amount), 0);
       const outstanding = getOutstanding(amount, paid);
       const daysOverdue = getDaysOverdue(invoice.dueDate, today, outstanding);
       return {
         id: invoice.id,
+        invoiceId: invoice.id,
         customerId: invoice.customer!.id,
         customer: invoice.customer!.legalName,
         shipment: invoice.shipment?.shipmentNumber ?? "-",
-        invoice: invoice.number,
+        invoice: invoice.invoiceNumber,
         amount,
         dueDate: invoice.dueDate,
         daysOverdue,
         status: invoiceStatusLabel(invoice.status, invoice.dueDate, today, outstanding),
         outstanding,
+        afipStatus: invoice.afipStatus,
+        afipCAE: invoice.afipCAE,
+        afipNumber: invoice.afipNumber,
       };
     })
     .sort((a, b) => {
@@ -402,25 +432,7 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
     };
   });
 
-  const payablesFromInvoices = invoices
-    .filter((invoice) => invoice.supplierId && invoice.supplier)
-    .map<AccountsPayableRow>((invoice) => {
-      const amount = asNumber(invoice.amount);
-      const paid = invoice.payments.reduce((sum, payment) => sum + asNumber(payment.amount), 0);
-      const outstanding = getOutstanding(amount, paid);
-      return {
-        id: `invoice-${invoice.id}`,
-        vendor: invoice.supplier!.name,
-        shipment: invoice.shipment?.shipmentNumber ?? "-",
-        reference: invoice.number,
-        amount,
-        dueDate: invoice.dueDate,
-        status: payableStatusLabel(invoice.status, invoice.dueDate, today, outstanding),
-        outstanding,
-      };
-    });
-
-  const accountsPayable = [...payablesFromVendorCosts, ...payablesFromInvoices].sort((a, b) => {
+  const accountsPayable = [...payablesFromVendorCosts].sort((a, b) => {
     const aTime = a.dueDate ? a.dueDate.getTime() : Number.MAX_SAFE_INTEGER;
     const bTime = b.dueDate ? b.dueDate.getTime() : Number.MAX_SAFE_INTEGER;
     return aTime - bTime;
@@ -433,7 +445,7 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
     .filter((payment) => payment.revenueId || payment.invoice?.customerId)
     .reduce((sum, payment) => sum + asNumber(payment.amount), 0);
   const currentMonthOutflows = monthlyPayments
-    .filter((payment) => payment.expenseId || payment.invoice?.supplierId)
+    .filter((payment) => payment.expenseId)
     .reduce((sum, payment) => sum + asNumber(payment.amount), 0);
 
   const overview: FinanceOverview = {
@@ -490,24 +502,23 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
 
   const forecastTransactions: ForecastTransaction[] = [];
 
-  for (const invoice of invoices) {
+  for (const invoice of shipmentInvoices) {
     if (COMPLETE_INVOICE_STATUSES.has(invoice.status) && invoice.payments.length === 0) {
       continue;
     }
 
     const paid = invoice.payments.reduce((sum, payment) => sum + asNumber(payment.amount), 0);
-    const amount = asNumber(invoice.amount);
+    const amount = asNumber(invoice.total);
     const outstanding = getOutstanding(amount, paid);
-    const expectedDate = invoice.dueDate ?? invoice.issueDate;
+    const expectedDate = (invoice.dueDate ?? invoice.issueDate) as Date;
     const actualDate = outstanding <= 0 ? latestDate(invoice.payments.map((p) => p.paymentDate)) : null;
     const forecastDate = actualDate ?? expectedDate;
 
     if (!forecastDate) continue;
-    if (invoice.status === FinanceStatus.CANCELLED) continue;
+    if (invoice.status === InvoiceStatus.CANCELLED) continue;
 
     const movementAmount = outstanding > 0 ? outstanding : Math.max(paid, amount);
     const isAR = Boolean(invoice.customerId && invoice.customer);
-    const isAP = Boolean(invoice.supplierId && invoice.supplier);
 
     if (isAR) {
       forecastTransactions.push({
@@ -518,26 +529,12 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
         amount: movementAmount,
         shipmentNumber: invoice.shipment?.shipmentNumber ?? "-",
         party: invoice.customer!.legalName,
-        reference: invoice.number,
+        reference: invoice.invoiceNumber,
         expectedDate,
         actualDate,
       });
     }
 
-    if (isAP) {
-      forecastTransactions.push({
-        id: `apinv-${invoice.id}`,
-        type: "OUTFLOW",
-        source: "AP_INVOICE",
-        date: forecastDate,
-        amount: movementAmount,
-        shipmentNumber: invoice.shipment?.shipmentNumber ?? "-",
-        party: invoice.supplier!.name,
-        reference: invoice.number,
-        expectedDate,
-        actualDate,
-      });
-    }
   }
 
   for (const expense of expenses) {
@@ -629,4 +626,58 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
     accountsPayable,
     arCustomers,
   };
+}
+
+export async function listInvoicesForAr(companyId: string): Promise<InvoiceArListRow[]> {
+  const invoices = await prisma.invoice.findMany({
+    where: {
+      companyId,
+    },
+    select: {
+      id: true,
+      invoiceNumber: true,
+      shipmentId: true,
+      dueDate: true,
+      issueDate: true,
+      status: true,
+      afipStatus: true,
+      afipCAE: true,
+      afipNumber: true,
+      currencyCode: true,
+      subtotal: true,
+      taxes: true,
+      total: true,
+      shipment: {
+        select: {
+          shipmentNumber: true,
+        },
+      },
+      customer: {
+        select: {
+          legalName: true,
+        },
+      },
+    },
+    orderBy: [{ createdAt: "desc" }],
+  });
+
+  return invoices
+    .filter((invoice) => Boolean(invoice.shipment) && Boolean(invoice.customer))
+    .map((invoice) => ({
+    id: invoice.id,
+    invoiceNumber: invoice.invoiceNumber,
+    shipmentId: invoice.shipmentId,
+      shipmentNumber: invoice.shipment!.shipmentNumber,
+      customerName: invoice.customer!.legalName,
+      currencyCode: invoice.currencyCode,
+      subtotal: asNumber(invoice.subtotal),
+      taxes: asNumber(invoice.taxes),
+      total: asNumber(invoice.total),
+      dueDate: invoice.dueDate,
+      issueDate: invoice.issueDate,
+      status: invoice.status,
+      afipStatus: invoice.afipStatus,
+      afipCAE: invoice.afipCAE,
+      afipNumber: invoice.afipNumber,
+    }));
 }

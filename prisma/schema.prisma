@@ -147,6 +147,23 @@ enum FinancialRecordStatus {
   PAID
 }
 
+enum InvoiceStatus {
+  DRAFT
+  READY_TO_ISSUE
+  ISSUED
+  PAID
+  CANCELLED
+}
+
+enum InvoiceLineType {
+  FREIGHT
+  HANDLING
+  CUSTOMS
+  DOCUMENTATION
+  INSURANCE
+  OTHER
+}
+
 enum NotificationLevel {
   INFO
   WARNING
@@ -479,7 +496,6 @@ model BusinessPartner {
   shipmentParty ShipmentParty[]
   shipmentLegs  ShipmentLeg[]
   expenses      Expense[]
-  invoices      Invoice[]
 
   @@index([companyId, partnerType, active])
   @@index([companyId, name])
@@ -803,31 +819,50 @@ model Expense {
 }
 
 model Invoice {
-  id           String        @id @default(cuid())
-  companyId    String
-  branchId     String?
-  shipmentId   String?
-  customerId   String?
-  supplierId   String?
-  number       String
-  issueDate    DateTime
-  dueDate      DateTime?
-  amount       Decimal
-  currencyCode String
-  status       FinanceStatus @default(DRAFT)
-  invoiceType  String
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
+  id            String        @id @default(cuid())
+  companyId     String
+  branchId      String?
+  invoiceNumber String
+  shipmentId    String
+  customerId    String
+  currencyCode  String
+  subtotal      Decimal       @default(0)
+  taxes         Decimal       @default(0)
+  total         Decimal       @default(0)
+  status        InvoiceStatus @default(DRAFT)
+  issueDate     DateTime?
+  dueDate       DateTime?
+  afipCAE       String?
+  afipNumber    String?
+  afipStatus    String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
 
-  company  Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  branch   Branch?          @relation(fields: [branchId], references: [id], onDelete: SetNull)
-  shipment Shipment?        @relation(fields: [shipmentId], references: [id], onDelete: SetNull)
-  customer Customer?        @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  supplier BusinessPartner? @relation(fields: [supplierId], references: [id], onDelete: SetNull)
-  currency Currency         @relation(fields: [currencyCode], references: [code], onDelete: Restrict)
+  company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch   Branch?   @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  shipment Shipment  @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  customer Customer  @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  currency Currency  @relation(fields: [currencyCode], references: [code], onDelete: Restrict)
+  lines    InvoiceLine[]
   payments Payment[]
 
-  @@unique([companyId, number, invoiceType])
+  @@unique([companyId, invoiceNumber])
+  @@index([companyId, shipmentId, status])
+  @@index([companyId, customerId, status])
+}
+
+model InvoiceLine {
+  id          String          @id @default(cuid())
+  invoiceId   String
+  description String
+  amount      Decimal
+  type        InvoiceLineType
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId, type])
 }
 
 model Payment {

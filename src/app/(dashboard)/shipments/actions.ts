@@ -15,6 +15,15 @@ import {
 
 import { enforceActionPermission } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
+import {
+  addInvoiceLine,
+  cancelInvoice,
+  createInvoiceForShipment,
+  deleteInvoice,
+  issueInvoiceWithAfip,
+  markInvoicePaid,
+  updateInvoiceHeader,
+} from "@/lib/invoices";
 
 const TRANSPORT_MODES = ["AIR", "OCEAN", "ROAD"] as const;
 const TRADE_DIRECTIONS = ["IMPORT", "EXPORT"] as const;
@@ -805,6 +814,31 @@ const expenseSchema = z.object({
   notes: z.string().max(600).optional(),
 });
 
+const invoiceCreateSchema = z.object({
+  shipmentId: z.string().min(1),
+  invoiceNumber: z.string().min(3).max(40).optional(),
+  currencyCode: z.enum(["USD", "EUR", "ARS"]).optional(),
+  lineDescription: z.string().min(2).max(220),
+  lineAmount: z.coerce.number().positive().max(100_000_000),
+  lineType: z.enum(["FREIGHT", "HANDLING", "CUSTOMS", "DOCUMENTATION", "INSURANCE", "OTHER"]),
+  taxes: z.coerce.number().min(0).max(100_000_000).optional(),
+  issueDate: z.string().optional(),
+  dueDate: z.string().optional(),
+});
+
+const invoiceLineUpsertSchema = z.object({
+  id: z.string().min(1),
+  shipmentId: z.string().min(1),
+  lineId: z.string().optional(),
+  lineDescription: z.string().min(2).max(220),
+  lineAmount: z.coerce.number().positive().max(100_000_000),
+  lineType: z.enum(["FREIGHT", "HANDLING", "CUSTOMS", "DOCUMENTATION", "INSURANCE", "OTHER"]),
+  invoiceNumber: z.string().min(3).max(40).optional(),
+  currencyCode: z.enum(["USD", "EUR", "ARS"]).optional(),
+  issueDate: z.string().optional(),
+  dueDate: z.string().optional(),
+});
+
 function parseDocumentType(value: FormDataEntryValue | null) {
   const normalized = String(value ?? "").trim().toUpperCase();
   const matched = documentTypeOptions.find((option) => option === normalized);
@@ -1200,6 +1234,245 @@ export async function deleteExpenseDirectAction(formData: FormData): Promise<voi
   const result = await deleteExpenseAction({ success: false }, formData);
   if (!result.success) {
     throw new Error(result.error ?? "Unable to delete expense");
+  }
+}
+
+export async function createInvoiceAction(
+  _prevState: ShipmentActionState,
+  formData: FormData,
+): Promise<ShipmentActionState> {
+  try {
+    const ctx = await getContext("SHIPMENTS", "EDIT");
+    await enforceActionPermission("REVENUE", "CREATE");
+    const parsed = invoiceCreateSchema.parse({
+      shipmentId: formData.get("shipmentId"),
+      invoiceNumber: formData.get("invoiceNumber") || undefined,
+      currencyCode: formData.get("currencyCode") || undefined,
+      lineDescription: formData.get("lineDescription"),
+      lineAmount: formData.get("lineAmount"),
+      lineType: formData.get("lineType"),
+      taxes: formData.get("taxes") || undefined,
+      issueDate: String(formData.get("issueDate") || ""),
+      dueDate: String(formData.get("dueDate") || ""),
+    });
+
+    const created = await createInvoiceForShipment({
+      companyId: ctx.companyId,
+      branchId: ctx.branchId,
+      shipmentId: parsed.shipmentId,
+      invoiceNumber: parsed.invoiceNumber?.trim(),
+      currencyCode: parsed.currencyCode,
+      taxes: parsed.taxes,
+      issueDate: parsed.issueDate,
+      dueDate: parsed.dueDate,
+      firstLine: {
+        description: parsed.lineDescription.trim(),
+        amount: parsed.lineAmount,
+        type: parsed.lineType,
+      },
+    });
+
+    revalidatePath(`/shipments/${parsed.shipmentId}`);
+    revalidatePath(`/invoices/${created.id}`);
+    revalidatePath("/finance?tab=ar");
+    return { success: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return { success: false, error: message };
+  }
+}
+
+export async function createInvoiceDirectAction(formData: FormData): Promise<void> {
+  const result = await createInvoiceAction({ success: false }, formData);
+  if (!result.success) {
+    throw new Error(result.error ?? "Unable to create invoice");
+  }
+}
+
+export async function upsertInvoiceAction(
+  _prevState: ShipmentActionState,
+  formData: FormData,
+): Promise<ShipmentActionState> {
+  try {
+    const ctx = await getContext("SHIPMENTS", "EDIT");
+    await enforceActionPermission("REVENUE", "EDIT");
+    const parsed = invoiceLineUpsertSchema.parse({
+      id: formData.get("id"),
+      shipmentId: formData.get("shipmentId"),
+      lineId: formData.get("lineId") || undefined,
+      lineDescription: formData.get("lineDescription"),
+      lineAmount: formData.get("lineAmount"),
+      lineType: formData.get("lineType"),
+    });
+
+    await addInvoiceLine({
+      companyId: ctx.companyId,
+      invoiceId: parsed.id,
+      description: parsed.lineDescription.trim(),
+      amount: parsed.lineAmount,
+      type: parsed.lineType,
+    });
+
+    if (parsed.issueDate || parsed.dueDate || parsed.invoiceNumber || parsed.currencyCode) {
+      await updateInvoiceHeader({
+        companyId: ctx.companyId,
+        invoiceId: parsed.id,
+        invoiceNumber: parsed.invoiceNumber,
+        currencyCode: parsed.currencyCode,
+        issueDate: parsed.issueDate,
+        dueDate: parsed.dueDate,
+      });
+    }
+
+    revalidatePath(`/shipments/${parsed.shipmentId}`);
+    revalidatePath(`/invoices/${parsed.id}`);
+    revalidatePath("/finance?tab=ar");
+    return { success: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return { success: false, error: message };
+  }
+}
+
+export async function upsertInvoiceDirectAction(formData: FormData): Promise<void> {
+  const result = await upsertInvoiceAction({ success: false }, formData);
+  if (!result.success) {
+    throw new Error(result.error ?? "Unable to update invoice");
+  }
+}
+
+export async function issueInvoiceAFIPAction(
+  _prevState: ShipmentActionState,
+  formData: FormData,
+): Promise<ShipmentActionState> {
+  try {
+    const ctx = await getContext("SHIPMENTS", "EDIT");
+    await enforceActionPermission("REVENUE", "EDIT");
+    const id = String(formData.get("id") ?? "").trim();
+    if (!id) {
+      throw new Error("Invoice id is required");
+    }
+
+    const issued = await issueInvoiceWithAfip({
+      companyId: ctx.companyId,
+      invoiceId: id,
+    });
+
+    revalidatePath(`/shipments/${issued.shipmentId}`);
+    revalidatePath(`/invoices/${issued.id}`);
+    revalidatePath("/finance?tab=ar");
+    return { success: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return { success: false, error: message };
+  }
+}
+
+export async function issueInvoiceAFIPDirectAction(formData: FormData): Promise<void> {
+  const result = await issueInvoiceAFIPAction({ success: false }, formData);
+  if (!result.success) {
+    throw new Error(result.error ?? "Unable to issue invoice in AFIP flow");
+  }
+}
+
+export async function markInvoicePaidAction(
+  _prevState: ShipmentActionState,
+  formData: FormData,
+): Promise<ShipmentActionState> {
+  try {
+    const ctx = await getContext("SHIPMENTS", "EDIT");
+    await enforceActionPermission("REVENUE", "EDIT");
+    const id = String(formData.get("id") ?? "").trim();
+    if (!id) {
+      throw new Error("Invoice id is required");
+    }
+
+    const updated = await markInvoicePaid({
+      companyId: ctx.companyId,
+      invoiceId: id,
+    });
+
+    revalidatePath(`/shipments/${updated.shipmentId}`);
+    revalidatePath(`/invoices/${updated.id}`);
+    revalidatePath("/finance?tab=ar");
+    return { success: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return { success: false, error: message };
+  }
+}
+
+export async function markInvoicePaidDirectAction(formData: FormData): Promise<void> {
+  const result = await markInvoicePaidAction({ success: false }, formData);
+  if (!result.success) {
+    throw new Error(result.error ?? "Unable to mark invoice paid");
+  }
+}
+
+export async function cancelInvoiceAction(
+  _prevState: ShipmentActionState,
+  formData: FormData,
+): Promise<ShipmentActionState> {
+  try {
+    const ctx = await getContext("SHIPMENTS", "EDIT");
+    await enforceActionPermission("REVENUE", "EDIT");
+    const id = String(formData.get("id") ?? "").trim();
+    if (!id) {
+      throw new Error("Invoice id is required");
+    }
+
+    const updated = await cancelInvoice({
+      companyId: ctx.companyId,
+      invoiceId: id,
+    });
+
+    revalidatePath(`/shipments/${updated.shipmentId}`);
+    revalidatePath(`/invoices/${updated.id}`);
+    revalidatePath("/finance?tab=ar");
+    return { success: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return { success: false, error: message };
+  }
+}
+
+export async function cancelInvoiceDirectAction(formData: FormData): Promise<void> {
+  const result = await cancelInvoiceAction({ success: false }, formData);
+  if (!result.success) {
+    throw new Error(result.error ?? "Unable to cancel invoice");
+  }
+}
+
+export async function deleteInvoiceAction(
+  _prevState: ShipmentActionState,
+  formData: FormData,
+): Promise<ShipmentActionState> {
+  try {
+    const ctx = await getContext("SHIPMENTS", "EDIT");
+    await enforceActionPermission("REVENUE", "DELETE");
+    const id = String(formData.get("id") ?? "").trim();
+    if (!id) {
+      throw new Error("Invoice id is required");
+    }
+
+    const deleted = await deleteInvoice({
+      companyId: ctx.companyId,
+      invoiceId: id,
+    });
+
+    revalidatePath(`/shipments/${deleted.shipmentId}`);
+    revalidatePath("/finance?tab=ar");
+    return { success: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return { success: false, error: message };
+  }
+}
+
+export async function deleteInvoiceDirectAction(formData: FormData): Promise<void> {
+  const result = await deleteInvoiceAction({ success: false }, formData);
+  if (!result.success) {
+    throw new Error(result.error ?? "Unable to delete invoice");
   }
 }
 

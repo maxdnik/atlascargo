@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import Link from "next/link";
+import { useActionState, useMemo, useState } from "react";
 import {
   AlertTriangle,
   ArrowRight,
@@ -11,7 +12,14 @@ import {
   ShipWheel,
   Truck,
 } from "lucide-react";
-import { DocumentRecordStatus, FinancialRecordStatus, MilestoneStatus } from "@prisma/client";
+import {
+  DocumentRecordStatus,
+  FinancialRecordStatus,
+  InvoiceLineType,
+  InvoiceStatus,
+  MilestoneStatus,
+  ShipmentStatus,
+} from "@prisma/client";
 
 import type { ShipmentActionState } from "@/app/(dashboard)/shipments/actions";
 import { MilestoneTimeline } from "@/components/shipments/milestone-timeline";
@@ -122,6 +130,26 @@ type ShipmentDetailViewModel = {
     status: FinancialRecordStatus;
     notes?: string | null;
   }>;
+  invoices: Array<{
+    id: string;
+    invoiceNumber: string;
+    status: InvoiceStatus;
+    currencyCode: string;
+    subtotal: number;
+    taxes: number;
+    total: number;
+    issueDate?: string | null;
+    dueDate?: string | null;
+    afipCAE?: string | null;
+    afipNumber?: string | null;
+    afipStatus?: string | null;
+    lines: Array<{
+      id: string;
+      description: string;
+      amount: number;
+      type: InvoiceLineType;
+    }>;
+  }>;
 };
 
 type Props = {
@@ -142,6 +170,9 @@ type Props = {
     canEditExpenses: boolean;
     canDeleteExpenses: boolean;
     canViewFinancialSummary: boolean;
+    canCreateInvoices: boolean;
+    canEditInvoices: boolean;
+    canDeleteInvoices: boolean;
   };
   actions: {
     updateShipmentAction: (
@@ -154,6 +185,12 @@ type Props = {
     upsertRevenueDirectAction: (formData: FormData) => Promise<void>;
     deleteExpenseDirectAction: (formData: FormData) => Promise<void>;
     upsertExpenseDirectAction: (formData: FormData) => Promise<void>;
+    createInvoiceDirectAction: (formData: FormData) => Promise<void>;
+    upsertInvoiceDirectAction: (formData: FormData) => Promise<void>;
+    issueInvoiceAFIPDirectAction: (formData: FormData) => Promise<void>;
+    markInvoicePaidDirectAction: (formData: FormData) => Promise<void>;
+    cancelInvoiceDirectAction: (formData: FormData) => Promise<void>;
+    deleteInvoiceDirectAction: (formData: FormData) => Promise<void>;
   };
 };
 
@@ -215,6 +252,22 @@ function statusPill(
   );
 }
 
+function invoiceStatusClass(status: InvoiceStatus) {
+  if (status === InvoiceStatus.PAID) return "bg-emerald-100 text-emerald-700";
+  if (status === InvoiceStatus.ISSUED) return "bg-sky-100 text-sky-700";
+  if (status === InvoiceStatus.READY_TO_ISSUE) return "bg-amber-100 text-amber-800";
+  if (status === InvoiceStatus.CANCELLED) return "bg-slate-200 text-slate-700";
+  return "bg-slate-100 text-slate-700";
+}
+
+function invoiceStatusLabel(status: InvoiceStatus) {
+  if (status === InvoiceStatus.READY_TO_ISSUE) return "Ready";
+  if (status === InvoiceStatus.ISSUED) return "Issued";
+  if (status === InvoiceStatus.PAID) return "Paid";
+  if (status === InvoiceStatus.CANCELLED) return "Cancelled";
+  return "Draft";
+}
+
 const docStatusClass: Record<DocumentRecordStatus, string> = {
   PENDING: "bg-amber-100 text-amber-800",
   RECEIVED: "bg-sky-100 text-sky-700",
@@ -226,6 +279,8 @@ const financeStatusClass: Record<FinancialRecordStatus, string> = {
   INVOICED: "bg-sky-100 text-sky-700",
   PAID: "bg-emerald-100 text-emerald-700",
 };
+
+const invoiceInitialState: ShipmentActionState = { success: false };
 
 function Card({ title, subtitle, children }: { title: string; subtitle?: string; children: React.ReactNode }) {
   return (
@@ -268,6 +323,9 @@ export function ShipmentDetailClient({
     canEditExpenses,
     canDeleteExpenses,
     canViewFinancialSummary,
+    canCreateInvoices,
+    canEditInvoices,
+    canDeleteInvoices,
   } = permissions;
   const {
     updateShipmentAction,
@@ -277,14 +335,37 @@ export function ShipmentDetailClient({
     upsertRevenueDirectAction: upsertRevenueAction,
     deleteExpenseDirectAction: deleteExpenseAction,
     upsertExpenseDirectAction: upsertExpenseAction,
+    createInvoiceDirectAction: createInvoiceAction,
+    upsertInvoiceDirectAction: upsertInvoiceAction,
+    issueInvoiceAFIPDirectAction: issueInvoiceAFIPAction,
+    markInvoicePaidDirectAction: markInvoicePaidAction,
+    cancelInvoiceDirectAction: cancelInvoiceAction,
+    deleteInvoiceDirectAction: deleteInvoiceAction,
   } = actions;
-  const defaultTab: "documents" | "revenue" | "expenses" = canViewDocuments
+  const defaultTab: "documents" | "revenue" | "expenses" | "invoices" = canViewDocuments
     ? "documents"
     : canViewRevenue
       ? "revenue"
-      : "expenses";
-  const [activeTab, setActiveTab] = useState<"documents" | "revenue" | "expenses">(defaultTab);
-
+      : canViewExpenses
+        ? "expenses"
+        : "invoices";
+  const [activeTab, setActiveTab] = useState<"documents" | "revenue" | "expenses" | "invoices">(
+    defaultTab,
+  );
+  const [invoiceCreateState] = useActionState<ShipmentActionState, FormData>(
+    async (_state, formData) => {
+      try {
+        await createInvoiceAction(formData);
+        return { success: true };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : "Unable to create invoice",
+        };
+      }
+    },
+    invoiceInitialState,
+  );
   const timeline = useMemo(() => {
     return shipment.milestones.map((m, index) => ({
       ...m,
@@ -295,6 +376,7 @@ export function ShipmentDetailClient({
   }, [shipment.milestones]);
 
   const routeLabel = `${shipment.originCode ?? "-"} → ${shipment.destinationCode ?? "-"}`;
+  const shipmentReadyForBilling = shipment.status === ShipmentStatus.CLOSED;
 
   return (
     <div className="space-y-5">
@@ -573,7 +655,122 @@ export function ShipmentDetailClient({
                   Expenses
                 </button>
               ) : null}
+              {canCreateInvoices || canEditInvoices || canDeleteInvoices ? (
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("invoices")}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-medium ${
+                    activeTab === "invoices"
+                      ? "bg-sky-600 text-white"
+                      : "border border-slate-200 text-slate-600"
+                  }`}
+                >
+                  Invoices
+                </button>
+              ) : null}
             </div>
+
+            {activeTab === "invoices" && (canCreateInvoices || canEditInvoices || canDeleteInvoices) ? (
+              <div className="mb-4 space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Create invoice</p>
+                    <p className="text-xs text-slate-600">
+                      Invoice is linked to this shipment and customer. Requires shipment closed.
+                    </p>
+                  </div>
+                  <span
+                    className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${
+                      shipmentReadyForBilling
+                        ? "bg-emerald-100 text-emerald-700"
+                        : "bg-amber-100 text-amber-800"
+                    }`}
+                  >
+                    {shipmentReadyForBilling ? "Ready for billing" : "Not ready for billing"}
+                  </span>
+                </div>
+                {canCreateInvoices ? (
+                  <form action={createInvoiceAction} className="space-y-2">
+                    <input type="hidden" name="shipmentId" value={shipment.id} />
+                    <div className="grid gap-2 md:grid-cols-2">
+                      <input
+                        name="invoiceNumber"
+                        required
+                        placeholder="Invoice number (internal)"
+                        className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                      />
+                      <select
+                        name="currencyCode"
+                        defaultValue="USD"
+                        className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                      >
+                        <option value="USD">USD</option>
+                        <option value="EUR">EUR</option>
+                        <option value="ARS">ARS</option>
+                      </select>
+                    </div>
+                    <input
+                      name="lineDescription"
+                      required
+                      placeholder="Line description"
+                      className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                    />
+                    <div className="grid gap-2 md:grid-cols-3">
+                      <input
+                        type="number"
+                        name="lineAmount"
+                        step="0.01"
+                        min="0.01"
+                        required
+                        placeholder="Line amount"
+                        className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                      />
+                      <select
+                        name="lineType"
+                        defaultValue="FREIGHT"
+                        className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                      >
+                        {Object.values(InvoiceLineType).map((type) => (
+                          <option key={type} value={type}>
+                            {type}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        type="number"
+                        name="taxes"
+                        step="0.01"
+                        min="0"
+                        defaultValue="0"
+                        placeholder="Taxes"
+                        className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                      />
+                    </div>
+                    <div className="grid gap-2 md:grid-cols-2">
+                      <input
+                        type="date"
+                        name="issueDate"
+                        className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                      />
+                      <input
+                        type="date"
+                        name="dueDate"
+                        className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                      />
+                    </div>
+                    <button
+                      type="submit"
+                      className="rounded-lg bg-sky-600 px-3 py-2 text-xs font-medium text-white transition hover:bg-sky-500"
+                    >
+                      Create invoice
+                    </button>
+                    {invoiceCreateState.error && !invoiceCreateState.success ? (
+                      <p className="text-xs text-rose-700">{invoiceCreateState.error}</p>
+                    ) : null}
+                  </form>
+                ) : null}
+              </div>
+            ) : null}
 
             {activeTab === "documents" && canViewDocuments ? (
               <div className="space-y-3">
@@ -840,6 +1037,158 @@ export function ShipmentDetailClient({
                     </button>
                   </form>
                 ) : null}
+              </div>
+            ) : null}
+
+            {activeTab === "invoices" && (canCreateInvoices || canEditInvoices || canDeleteInvoices) ? (
+              <div className="mt-4 space-y-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Invoices</p>
+                {shipment.invoices.length === 0 ? (
+                  <Empty label="No invoices linked to this shipment yet." />
+                ) : (
+                  shipment.invoices.map((invoice) => (
+                    <div key={invoice.id} className="rounded-xl border border-slate-200 bg-white p-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <p className="text-sm font-semibold text-slate-900">{invoice.invoiceNumber}</p>
+                          <p className="text-xs text-slate-600">
+                            Total {money(invoice.total)} · Subtotal {money(invoice.subtotal)} · Taxes {money(invoice.taxes)}
+                          </p>
+                        </div>
+                        <span
+                          className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${invoiceStatusClass(
+                            invoice.status,
+                          )}`}
+                        >
+                          {invoiceStatusLabel(invoice.status)}
+                        </span>
+                      </div>
+                      <div className="mt-2 text-xs text-slate-600">
+                        <p>Issue: {dateLabel(invoice.issueDate)}</p>
+                        <p>Due: {dateLabel(invoice.dueDate)}</p>
+                        <p>AFIP CAE: {invoice.afipCAE ?? "-"}</p>
+                        <p>AFIP Number: {invoice.afipNumber ?? "-"}</p>
+                        <p>AFIP Status: {invoice.afipStatus ?? "-"}</p>
+                      </div>
+                      {invoice.status === InvoiceStatus.ISSUED && !invoice.afipCAE ? (
+                        <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-700">
+                          Warning: invoice issued without AFIP CAE.
+                        </p>
+                      ) : null}
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <Link
+                          href={`/invoices/${invoice.id}`}
+                          className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
+                        >
+                          Open detail
+                        </Link>
+                        {canEditInvoices ? (
+                          <form action={issueInvoiceAFIPAction}>
+                            <input type="hidden" name="id" value={invoice.id} />
+                            <button
+                              type="submit"
+                              className="rounded-lg border border-sky-200 px-2.5 py-1 text-xs font-medium text-sky-700 transition hover:bg-sky-50"
+                            >
+                              Issue AFIP
+                            </button>
+                          </form>
+                        ) : null}
+                        {canEditInvoices ? (
+                          <form action={markInvoicePaidAction}>
+                            <input type="hidden" name="id" value={invoice.id} />
+                            <button
+                              type="submit"
+                              className="rounded-lg border border-emerald-200 px-2.5 py-1 text-xs font-medium text-emerald-700 transition hover:bg-emerald-50"
+                            >
+                              Mark paid
+                            </button>
+                          </form>
+                        ) : null}
+                        {canEditInvoices ? (
+                          <form action={cancelInvoiceAction}>
+                            <input type="hidden" name="id" value={invoice.id} />
+                            <button
+                              type="submit"
+                              className="rounded-lg border border-amber-200 px-2.5 py-1 text-xs font-medium text-amber-700 transition hover:bg-amber-50"
+                            >
+                              Cancel
+                            </button>
+                          </form>
+                        ) : null}
+                        {canDeleteInvoices ? (
+                          <form action={deleteInvoiceAction}>
+                            <input type="hidden" name="id" value={invoice.id} />
+                            <button
+                              type="submit"
+                              className="rounded-lg border border-rose-200 px-2.5 py-1 text-xs font-medium text-rose-700 transition hover:bg-rose-50"
+                            >
+                              Delete
+                            </button>
+                          </form>
+                        ) : null}
+                      </div>
+                      {canEditInvoices ? (
+                        <form action={upsertInvoiceAction} className="mt-3 space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-2">
+                          <input type="hidden" name="id" value={invoice.id} />
+                          <input type="hidden" name="shipmentId" value={shipment.id} />
+                          <input type="hidden" name="invoiceNumber" value={invoice.invoiceNumber} />
+                          <input type="hidden" name="currencyCode" value={invoice.currencyCode} />
+                          <input type="hidden" name="issueDate" value={invoice.issueDate ? new Date(invoice.issueDate).toISOString().slice(0, 10) : ""} />
+                          <input type="hidden" name="dueDate" value={invoice.dueDate ? new Date(invoice.dueDate).toISOString().slice(0, 10) : ""} />
+                          <div className="grid gap-2 md:grid-cols-3">
+                            <input
+                              name="lineDescription"
+                              required
+                              placeholder="Add line description"
+                              className="rounded-lg border border-slate-200 px-2 py-1.5 text-xs"
+                            />
+                            <input
+                              type="number"
+                              name="lineAmount"
+                              step="0.01"
+                              min="0.01"
+                              required
+                              placeholder="Amount"
+                              className="rounded-lg border border-slate-200 px-2 py-1.5 text-xs"
+                            />
+                            <select
+                              name="lineType"
+                              defaultValue="OTHER"
+                              className="rounded-lg border border-slate-200 px-2 py-1.5 text-xs"
+                            >
+                              {Object.values(InvoiceLineType).map((type) => (
+                                <option key={type} value={type}>
+                                  {type}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <button
+                            type="submit"
+                            className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-700 transition hover:bg-white"
+                          >
+                            Add line
+                          </button>
+                        </form>
+                      ) : null}
+                      {invoice.lines.length > 0 ? (
+                        <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-2">
+                          <p className="mb-1 text-xs font-medium text-slate-600">Lines</p>
+                          <ul className="space-y-1">
+                            {invoice.lines.map((line) => (
+                              <li key={line.id} className="flex items-center justify-between gap-2 text-xs text-slate-700">
+                                <span>
+                                  {line.description} · {line.type}
+                                </span>
+                                <span className="font-medium">{money(line.amount)}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      ) : null}
+                    </div>
+                  ))
+                )}
               </div>
             ) : null}
           </Card>

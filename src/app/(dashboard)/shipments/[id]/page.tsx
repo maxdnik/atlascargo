@@ -4,16 +4,23 @@ import { PermissionAction, PermissionResource } from "@prisma/client";
 import { getShipmentById } from "@/lib/shipments";
 import { listCustomers } from "@/lib/customers";
 import {
+  createInvoiceDirectAction,
+  issueInvoiceAFIPDirectAction,
+  markInvoicePaidDirectAction,
+  cancelInvoiceDirectAction,
+  deleteInvoiceDirectAction,
   deleteExpenseDirectAction,
   deleteRevenueDirectAction,
   deleteShipmentDocumentDirectAction,
   updateShipmentAction,
   upsertExpenseDirectAction,
+  upsertInvoiceDirectAction,
   upsertRevenueDirectAction,
   upsertShipmentDocumentDirectAction,
 } from "@/app/(dashboard)/shipments/actions";
 import { canUser, enforcePagePermission } from "@/lib/permissions";
 import { ShipmentDetailClient } from "@/components/shipments/shipment-detail-client";
+import { InvoiceLineType, InvoiceStatus } from "@prisma/client";
 
 type ShipmentEditPageProps = {
   params: Promise<{
@@ -99,6 +106,21 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
       PermissionResource.EXPENSES,
       PermissionAction.VIEW_FINANCIALS,
     ));
+  const canCreateInvoices = await canUser(
+    { id: session.userId, role: session.role, companyId: session.companyId },
+    PermissionResource.REVENUE,
+    PermissionAction.CREATE,
+  );
+  const canEditInvoices = await canUser(
+    { id: session.userId, role: session.role, companyId: session.companyId },
+    PermissionResource.REVENUE,
+    PermissionAction.EDIT,
+  );
+  const canDeleteInvoices = await canUser(
+    { id: session.userId, role: session.role, companyId: session.companyId },
+    PermissionResource.REVENUE,
+    PermissionAction.DELETE,
+  );
 
   const { id } = await params;
   const shipment = await getShipmentById(session.companyId, id);
@@ -226,6 +248,26 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
           status: row.status,
           notes: row.notes,
         })),
+        invoices: shipment.invoices.map((row) => ({
+          id: row.id,
+          invoiceNumber: row.invoiceNumber,
+          status: row.status as InvoiceStatus,
+          currencyCode: row.currencyCode,
+          subtotal: Number(row.subtotal),
+          taxes: Number(row.taxes),
+          total: Number(row.total),
+          issueDate: row.issueDate?.toISOString() ?? null,
+          dueDate: row.dueDate?.toISOString() ?? null,
+          afipCAE: row.afipCAE,
+          afipNumber: row.afipNumber,
+          afipStatus: row.afipStatus,
+          lines: row.lines.map((line) => ({
+            id: line.id,
+            description: line.description,
+            amount: Number(line.amount),
+            type: line.type as InvoiceLineType,
+          })),
+        })),
       }}
       customers={customers}
       permissions={{
@@ -243,6 +285,9 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
         canEditExpenses,
         canDeleteExpenses,
         canViewFinancialSummary,
+        canCreateInvoices,
+        canEditInvoices,
+        canDeleteInvoices,
       }}
       actions={{
         updateShipmentAction,
@@ -252,6 +297,12 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
         upsertRevenueDirectAction,
         deleteExpenseDirectAction,
         upsertExpenseDirectAction,
+        createInvoiceDirectAction,
+        upsertInvoiceDirectAction,
+        issueInvoiceAFIPDirectAction,
+        markInvoicePaidDirectAction,
+        cancelInvoiceDirectAction,
+        deleteInvoiceDirectAction,
       }}
     />
   );

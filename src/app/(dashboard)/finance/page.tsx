@@ -591,7 +591,14 @@ export default async function FinancePage({ searchParams }: FinancePageProps) {
                       <tr key={row.id} className="hover:bg-slate-50/70">
                         <td className="px-4 py-2.5">{row.customer}</td>
                         <td className="px-4 py-2.5">{row.shipment}</td>
-                        <td className="px-4 py-2.5 font-medium text-slate-900">{row.invoice}</td>
+                        <td className="px-4 py-2.5 font-medium text-slate-900">
+                          <Link href={`/invoices/${row.invoiceId}`} className="hover:text-sky-700">
+                            {row.invoice}
+                          </Link>
+                          <div className="mt-1 text-[11px] text-slate-500">
+                            AFIP: {row.afipStatus ?? "PENDING"}{row.afipCAE ? ` · CAE ${row.afipCAE}` : ""}
+                          </div>
+                        </td>
                         <td className="px-4 py-2.5">{formatMoney(row.amount)}</td>
                         <td className="px-4 py-2.5">{formatDate(row.dueDate)}</td>
                         <td
