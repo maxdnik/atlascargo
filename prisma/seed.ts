@@ -1,6 +1,13 @@
 import "dotenv/config";
 import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
-import { PermissionAction, PermissionResource, PrismaClient, UserRole } from "@prisma/client";
+import {
+  GeneralExpenseCategory,
+  GeneralExpenseStatus,
+  PermissionAction,
+  PermissionResource,
+  PrismaClient,
+  UserRole,
+} from "@prisma/client";
 import bcrypt from "bcryptjs";
 import { baseRolePermissionMatrix, roleDisplayName } from "@/lib/permission-config";
 import { resourceActionHints } from "@/lib/permission-hints";
@@ -731,6 +738,57 @@ async function main() {
       dueDate: new Date("2026-04-18T00:00:00.000Z"),
       status: "PAID",
       notes: "Airline invoice LH-INV-55619 paid.",
+    },
+  });
+
+  await prisma.generalExpense.upsert({
+    where: { id: "gexp_salaries_2026_04" },
+    update: {},
+    create: {
+      id: "gexp_salaries_2026_04",
+      companyId: company.id,
+      branchId: branchBA.id,
+      conceptCategory: GeneralExpenseCategory.SALARIES,
+      customConcept: null,
+      amount: "18500.00",
+      currencyCode: "USD",
+      dueDate: new Date("2026-04-30T00:00:00.000Z"),
+      status: GeneralExpenseStatus.PENDING,
+      notes: "Monthly payroll operations and customer service team.",
+    },
+  });
+
+  await prisma.generalExpense.upsert({
+    where: { id: "gexp_rent_2026_04" },
+    update: {},
+    create: {
+      id: "gexp_rent_2026_04",
+      companyId: company.id,
+      branchId: branchBA.id,
+      conceptCategory: GeneralExpenseCategory.RENT,
+      customConcept: null,
+      amount: "4200.00",
+      currencyCode: "USD",
+      dueDate: new Date("2026-04-10T00:00:00.000Z"),
+      status: GeneralExpenseStatus.PAID,
+      notes: "Main office lease - Buenos Aires HQ.",
+    },
+  });
+
+  await prisma.generalExpense.upsert({
+    where: { id: "gexp_other_2026_04" },
+    update: {},
+    create: {
+      id: "gexp_other_2026_04",
+      companyId: company.id,
+      branchId: branchBA.id,
+      conceptCategory: GeneralExpenseCategory.OTHER,
+      customConcept: "Accounting advisory retainer",
+      amount: "980.00",
+      currencyCode: "USD",
+      dueDate: new Date("2026-04-25T00:00:00.000Z"),
+      status: GeneralExpenseStatus.PENDING,
+      notes: "External accounting and tax advisory support.",
     },
   });
 

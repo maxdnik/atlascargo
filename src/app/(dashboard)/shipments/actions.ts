@@ -820,10 +820,11 @@ const invoiceCreateSchema = z.object({
   currencyCode: z.enum(["USD", "EUR", "ARS"]).optional(),
   lineDescription: z.string().min(2).max(220),
   lineAmount: z.coerce.number().positive().max(100_000_000),
-  lineType: z.enum(["FREIGHT", "HANDLING", "CUSTOMS", "DOCUMENTATION", "INSURANCE", "OTHER"]),
+  lineType: z.enum(["FREIGHT", "HANDLING", "CUSTOMS", "DOCUMENTATION", "OTHER"]),
   taxes: z.coerce.number().min(0).max(100_000_000).optional(),
   issueDate: z.string().optional(),
   dueDate: z.string().optional(),
+  notes: z.string().max(1000).optional(),
 });
 
 const invoiceLineUpsertSchema = z.object({
@@ -832,11 +833,12 @@ const invoiceLineUpsertSchema = z.object({
   lineId: z.string().optional(),
   lineDescription: z.string().min(2).max(220),
   lineAmount: z.coerce.number().positive().max(100_000_000),
-  lineType: z.enum(["FREIGHT", "HANDLING", "CUSTOMS", "DOCUMENTATION", "INSURANCE", "OTHER"]),
+  lineType: z.enum(["FREIGHT", "HANDLING", "CUSTOMS", "DOCUMENTATION", "OTHER"]),
   invoiceNumber: z.string().min(3).max(40).optional(),
   currencyCode: z.enum(["USD", "EUR", "ARS"]).optional(),
   issueDate: z.string().optional(),
   dueDate: z.string().optional(),
+  notes: z.string().max(1000).optional(),
 });
 
 function parseDocumentType(value: FormDataEntryValue | null) {
@@ -863,6 +865,7 @@ function parseDocumentStatus(value: FormDataEntryValue | null) {
   }
   return normalized as DocumentRecordStatus;
 }
+
 
 async function assertShipmentAccess(companyId: string, shipmentId: string) {
   const shipment = await prisma.shipment.findFirst({
@@ -1254,6 +1257,7 @@ export async function createInvoiceAction(
       taxes: formData.get("taxes") || undefined,
       issueDate: String(formData.get("issueDate") || ""),
       dueDate: String(formData.get("dueDate") || ""),
+      notes: formData.get("notes") || undefined,
     });
 
     const created = await createInvoiceForShipment({
@@ -1265,6 +1269,7 @@ export async function createInvoiceAction(
       taxes: parsed.taxes,
       issueDate: parsed.issueDate,
       dueDate: parsed.dueDate,
+      notes: parsed.notes,
       firstLine: {
         description: parsed.lineDescription.trim(),
         amount: parsed.lineAmount,
@@ -1273,8 +1278,9 @@ export async function createInvoiceAction(
     });
 
     revalidatePath(`/shipments/${parsed.shipmentId}`);
-    revalidatePath(`/invoices/${created.id}`);
-    revalidatePath("/finance?tab=ar");
+    revalidatePath(`/finance/invoices/${created.id}`);
+    revalidatePath("/finance/invoices");
+    revalidatePath("/finance/ar");
     return { success: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
@@ -1303,6 +1309,11 @@ export async function upsertInvoiceAction(
       lineDescription: formData.get("lineDescription"),
       lineAmount: formData.get("lineAmount"),
       lineType: formData.get("lineType"),
+      invoiceNumber: formData.get("invoiceNumber") || undefined,
+      currencyCode: formData.get("currencyCode") || undefined,
+      issueDate: String(formData.get("issueDate") || ""),
+      dueDate: String(formData.get("dueDate") || ""),
+      notes: formData.get("notes") || undefined,
     });
 
     await addInvoiceLine({
@@ -1321,12 +1332,14 @@ export async function upsertInvoiceAction(
         currencyCode: parsed.currencyCode,
         issueDate: parsed.issueDate,
         dueDate: parsed.dueDate,
+        notes: parsed.notes,
       });
     }
 
     revalidatePath(`/shipments/${parsed.shipmentId}`);
-    revalidatePath(`/invoices/${parsed.id}`);
-    revalidatePath("/finance?tab=ar");
+    revalidatePath(`/finance/invoices/${parsed.id}`);
+    revalidatePath("/finance/invoices");
+    revalidatePath("/finance/ar");
     return { success: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
@@ -1359,8 +1372,9 @@ export async function issueInvoiceAFIPAction(
     });
 
     revalidatePath(`/shipments/${issued.shipmentId}`);
-    revalidatePath(`/invoices/${issued.id}`);
-    revalidatePath("/finance?tab=ar");
+    revalidatePath(`/finance/invoices/${issued.id}`);
+    revalidatePath("/finance/invoices");
+    revalidatePath("/finance/ar");
     return { success: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
@@ -1393,8 +1407,9 @@ export async function markInvoicePaidAction(
     });
 
     revalidatePath(`/shipments/${updated.shipmentId}`);
-    revalidatePath(`/invoices/${updated.id}`);
-    revalidatePath("/finance?tab=ar");
+    revalidatePath(`/finance/invoices/${updated.id}`);
+    revalidatePath("/finance/invoices");
+    revalidatePath("/finance/ar");
     return { success: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
@@ -1427,8 +1442,9 @@ export async function cancelInvoiceAction(
     });
 
     revalidatePath(`/shipments/${updated.shipmentId}`);
-    revalidatePath(`/invoices/${updated.id}`);
-    revalidatePath("/finance?tab=ar");
+    revalidatePath(`/finance/invoices/${updated.id}`);
+    revalidatePath("/finance/invoices");
+    revalidatePath("/finance/ar");
     return { success: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
@@ -1461,7 +1477,8 @@ export async function deleteInvoiceAction(
     });
 
     revalidatePath(`/shipments/${deleted.shipmentId}`);
-    revalidatePath("/finance?tab=ar");
+    revalidatePath("/finance/invoices");
+    revalidatePath("/finance/ar");
     return { success: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";

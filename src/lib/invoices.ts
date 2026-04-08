@@ -146,6 +146,7 @@ export async function createInvoiceForShipment(input: {
   taxes?: number | null;
   issueDate?: string | null;
   dueDate?: string | null;
+  notes?: string | null;
   firstLine: {
     description: string;
     amount: number;
@@ -204,6 +205,7 @@ export async function createInvoiceForShipment(input: {
         issueDate,
         dueDate,
         afipStatus: "NOT_ISSUED",
+        notes: input.notes?.trim() ? input.notes.trim() : null,
       },
       select: { id: true },
     });
@@ -267,6 +269,7 @@ export async function updateInvoiceHeader(input: {
   issueDate?: string | null;
   dueDate?: string | null;
   taxes?: number | null;
+  notes?: string | null;
 }) {
   return prisma.$transaction(async (tx) => {
     const invoice = await tx.invoice.findFirst({
@@ -300,6 +303,7 @@ export async function updateInvoiceHeader(input: {
         issueDate: input.issueDate !== undefined ? dateFromInput(input.issueDate) : undefined,
         dueDate: input.dueDate !== undefined ? dateFromInput(input.dueDate) : undefined,
         taxes: input.taxes ?? undefined,
+        notes: input.notes !== undefined ? (input.notes?.trim() ? input.notes.trim() : null) : undefined,
       },
     });
 
@@ -318,7 +322,7 @@ export async function issueInvoiceAFIP(invoiceId: string) {
   return {
     cae,
     afipNumber,
-    afipStatus: "AUTHORIZED",
+    afipStatus: "APPROVED",
   };
 }
 

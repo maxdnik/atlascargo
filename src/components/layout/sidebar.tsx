@@ -27,7 +27,8 @@ type SidebarNavItem = {
   href: string;
   label: string;
   icon: keyof typeof iconMap;
-  section: "dashboard" | "customers" | "shipments" | "quotes" | "finance" | "reports" | "admin";
+  section: string;
+  match?: "exact" | "prefix";
 };
 
 export type { SidebarNavItem };
@@ -37,18 +38,38 @@ type SidebarProps = {
 };
 
 const defaultNavItems: SidebarNavItem[] = [
-  { href: "/dashboard", label: "Dashboard", icon: "dashboard", section: "dashboard" },
-  { href: "/shipments", label: "Shipments", icon: "shipments", section: "shipments" },
-  { href: "/quotes", label: "Quotes", icon: "quotes", section: "quotes" },
-  { href: "/customers", label: "Customers", icon: "customers", section: "customers" },
-  { href: "/finance", label: "Finance", icon: "finance", section: "finance" },
-  { href: "/reports", label: "Reports", icon: "reports", section: "reports" },
-  { href: "/admin/users", label: "Admin", icon: "admin", section: "admin" },
+  { href: "/dashboard", label: "Dashboard", icon: "dashboard", section: "dashboard", match: "prefix" },
+  { href: "/shipments", label: "Shipments", icon: "shipments", section: "shipments", match: "prefix" },
+  { href: "/quotes", label: "Quotes", icon: "quotes", section: "quotes", match: "prefix" },
+  { href: "/customers", label: "Customers", icon: "customers", section: "customers", match: "prefix" },
+  { href: "/finance", label: "Finance", icon: "finance", section: "finance", match: "prefix" },
+  { href: "/finance/invoices", label: "Invoices", icon: "finance", section: "finance", match: "prefix" },
+  { href: "/finance/expenses", label: "Expenses", icon: "finance", section: "finance", match: "prefix" },
+  { href: "/reports", label: "Reports", icon: "reports", section: "reports", match: "prefix" },
+  { href: "/admin/users", label: "Admin", icon: "admin", section: "admin", match: "prefix" },
 ];
 
 export function Sidebar({ items = defaultNavItems }: SidebarProps) {
   const pathname = usePathname();
-  const currentSection = (pathname.split("/").filter(Boolean)[0] ?? "") as SidebarNavItem["section"] | "";
+
+  const normalizedPathname =
+    pathname !== "/" && pathname.endsWith("/") ? pathname.slice(0, -1) : pathname;
+  const activeItemId =
+    items
+      .map((item, index) => {
+        const normalizedHref = item.href.endsWith("/") && item.href !== "/" ? item.href.slice(0, -1) : item.href;
+        const matchMode = item.match ?? "prefix";
+        const isExactMatch = normalizedPathname === normalizedHref;
+        const isPrefixMatch =
+          normalizedPathname.startsWith(`${normalizedHref}/`) && matchMode === "prefix";
+        if (!isExactMatch && !isPrefixMatch) {
+          return { id: item.id ?? `${item.href}-${item.label}`, score: -1, index };
+        }
+        const score = isExactMatch ? normalizedHref.length + 10_000 : normalizedHref.length;
+        return { id: item.id ?? `${item.href}-${item.label}`, score, index };
+      })
+      .filter((entry) => entry.score >= 0)
+      .sort((a, b) => (a.score === b.score ? a.index - b.index : b.score - a.score))[0]?.id ?? null;
 
   return (
     <aside className="z-30 hidden h-screen w-72 shrink-0 border-r border-slate-800 bg-slate-950 lg:sticky lg:top-0 lg:block">
@@ -61,12 +82,13 @@ export function Sidebar({ items = defaultNavItems }: SidebarProps) {
       </div>
       <nav className="space-y-1 p-4">
         {items.map((item) => {
-          const isActive = currentSection === item.section;
+          const itemId = item.id ?? `${item.href}-${item.label}`;
+          const isActive = itemId === activeItemId;
           const Icon = iconMap[item.icon];
 
           return (
             <Link
-              key={item.id ?? `${item.href}-${item.label}`}
+              key={itemId}
               href={item.href}
               className={`group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition ${
                 isActive

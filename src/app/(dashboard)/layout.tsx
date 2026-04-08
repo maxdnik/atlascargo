@@ -83,15 +83,27 @@ export default async function DashboardLayout({
       label: "Finance",
       icon: "finance",
       section: "finance",
+      match: "exact",
     });
   }
   if (visibleModules.has(PermissionResource.REVENUE)) {
     navItems.push({
       id: "invoices",
-      href: "/invoices",
+      href: "/finance/invoices",
       label: "Invoices",
       icon: "finance",
       section: "finance",
+      match: "prefix",
+    });
+  }
+  if (visibleModules.has(PermissionResource.EXPENSES)) {
+    navItems.push({
+      id: "general-expenses",
+      href: "/finance/expenses",
+      label: "General Expenses",
+      icon: "finance",
+      section: "finance",
+      match: "prefix",
     });
   }
   if (visibleModules.has(PermissionResource.ADMIN)) {
@@ -101,6 +113,7 @@ export default async function DashboardLayout({
       label: "Admin",
       icon: "admin",
       section: "admin",
+      match: "prefix",
     });
   }
 

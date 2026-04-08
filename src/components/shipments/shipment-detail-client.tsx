@@ -22,6 +22,14 @@ import {
 } from "@prisma/client";
 
 import type { ShipmentActionState } from "@/app/(dashboard)/shipments/actions";
+import {
+  cancelFinanceInvoiceAction,
+  createFinanceInvoiceAction,
+  deleteFinanceInvoiceAction,
+  issueFinanceInvoiceAfipAction,
+  markFinanceInvoicePaidAction,
+  updateFinanceInvoiceAction,
+} from "@/app/(dashboard)/finance/actions";
 import { MilestoneTimeline } from "@/components/shipments/milestone-timeline";
 import { ShipmentForm } from "@/components/shipments/shipment-form";
 
@@ -1077,7 +1085,7 @@ export function ShipmentDetailClient({
                       ) : null}
                       <div className="mt-2 flex flex-wrap gap-2">
                         <Link
-                          href={`/invoices/${invoice.id}`}
+                          href={`/finance/invoices/${invoice.id}`}
                           className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
                         >
                           Open detail

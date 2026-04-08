@@ -160,8 +160,24 @@ enum InvoiceLineType {
   HANDLING
   CUSTOMS
   DOCUMENTATION
-  INSURANCE
   OTHER
+}
+
+enum GeneralExpenseCategory {
+  SALARIES
+  SOCIAL_SECURITY
+  INSURANCE
+  MESSENGER
+  INTERNET
+  RENT
+  NOTARY
+  OTHER
+}
+
+enum GeneralExpenseStatus {
+  PENDING
+  PAID
+  CANCELLED
 }
 
 enum NotificationLevel {
@@ -216,6 +232,7 @@ model Company {
   expenses      Expense[]
   exchangeRates ExchangeRate[]
   invoices      Invoice[]
+  generalExpenses GeneralExpense[]
   payments      Payment[]
   tasks         Task[]
   notes         Note[]
@@ -242,6 +259,7 @@ model Branch {
   revenues    Revenue[]
   expenses    Expense[]
   invoices    Invoice[]
+  generalExpenses GeneralExpense[]
   payments    Payment[]
 
   @@unique([companyId, code])
@@ -368,6 +386,7 @@ model Currency {
   revenues     Revenue[]
   expenses     Expense[]
   invoices     Invoice[]
+  generalExpenses GeneralExpense[]
   payments     Payment[]
   quoteItems   QuoteItem[]
   quoteCharges QuoteCharge[]
@@ -835,6 +854,7 @@ model Invoice {
   afipCAE       String?
   afipNumber    String?
   afipStatus    String?
+  notes         String?
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
 
@@ -863,6 +883,28 @@ model InvoiceLine {
   invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
 
   @@index([invoiceId, type])
+}
+
+model GeneralExpense {
+  id              String                 @id @default(cuid())
+  companyId       String
+  branchId        String?
+  conceptCategory GeneralExpenseCategory
+  customConcept   String?
+  amount          Decimal
+  currencyCode    String
+  dueDate         DateTime?
+  status          GeneralExpenseStatus   @default(PENDING)
+  notes           String?
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+
+  company  Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch   Branch?  @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  currency Currency @relation(fields: [currencyCode], references: [code], onDelete: Restrict)
+
+  @@index([companyId, conceptCategory, status])
+  @@index([companyId, dueDate])
 }
 
 model Payment {

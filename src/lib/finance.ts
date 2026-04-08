@@ -1,4 +1,10 @@
-import { FinancialRecordStatus, ShipmentStatus, type InvoiceStatus } from "@prisma/client";
+import {
+  FinancialRecordStatus,
+  GeneralExpenseCategory,
+  GeneralExpenseStatus,
+  ShipmentStatus,
+  type InvoiceStatus,
+} from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 
 type ShipmentFinanceRecord = {
@@ -13,7 +19,7 @@ type ShipmentFinanceRecord = {
 type ForecastTransaction = {
   id: string;
   type: "INFLOW" | "OUTFLOW";
-  source: "AR_INVOICE" | "AP_COST";
+  source: "AR_INVOICE" | "AP_COST" | "GENERAL_OVERHEAD";
   date: Date;
   amount: number;
   shipmentNumber: string;
@@ -25,8 +31,11 @@ type ForecastTransaction = {
 
 export type FinanceOverview = {
   revenueCurrentMonth: number;
-  costsCurrentMonth: number;
+  shipmentCostsCurrentMonth: number;
+  generalOverheadCurrentMonth: number;
+  totalCostsCurrentMonth: number;
   grossMargin: number;
+  netOperatingResult: number;
   grossMarginPct: number;
   netCashFlow: number;
   accountsReceivable: number;
@@ -99,11 +108,24 @@ export type FinanceModuleData = {
   arCustomers: Array<{ id: string; name: string }>;
 };
 
+export type GeneralExpenseRow = {
+  id: string;
+  conceptCategory: GeneralExpenseCategory;
+  customConcept: string | null;
+  amount: number;
+  currencyCode: string;
+  dueDate: Date | null;
+  status: GeneralExpenseStatus;
+  notes: string | null;
+  createdAt: Date;
+};
+
 export type InvoiceArListRow = {
   id: string;
   invoiceNumber: string;
   shipmentId: string;
   shipmentNumber: string;
+  customerId: string;
   customerName: string;
   currencyCode: string;
   subtotal: number;
@@ -111,6 +133,7 @@ export type InvoiceArListRow = {
   total: number;
   dueDate: Date | null;
   issueDate: Date | null;
+  notes: string | null;
   status: string;
   afipStatus: string | null;
   afipCAE: string | null;
@@ -217,7 +240,7 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
   const currentMonthStart = monthStart(today);
   const currentMonthEnd = monthEnd(today);
 
-  const [shipments, revenues, expenses, invoices, monthlyPayments] = await Promise.all([
+  const [shipments, revenues, expenses, generalExpenses, invoices, monthlyPayments] = await Promise.all([
     prisma.shipment.findMany({
       where: { companyId },
       select: {
@@ -279,6 +302,21 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
             paymentDate: true,
           },
         },
+      },
+    }),
+    prisma.generalExpense.findMany({
+      where: { companyId },
+      select: {
+        id: true,
+        conceptCategory: true,
+        customConcept: true,
+        amount: true,
+        currencyCode: true,
+        dueDate: true,
+        status: true,
+        notes: true,
+        createdAt: true,
+        updatedAt: true,
       },
     }),
     prisma.invoice.findMany({
@@ -343,9 +381,12 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
     .filter((entry) => entry.createdAt >= currentMonthStart && entry.createdAt < currentMonthEnd)
     .reduce((sum, entry) => sum + asNumber(entry.amountBase), 0);
 
-  const costsCurrentMonth = expenses
+  const shipmentCostsCurrentMonth = expenses
     .filter((entry) => entry.createdAt >= currentMonthStart && entry.createdAt < currentMonthEnd)
     .reduce((sum, entry) => sum + asNumber(entry.amountBase), 0);
+  const generalOverheadCurrentMonth = generalExpenses
+    .filter((entry) => entry.createdAt >= currentMonthStart && entry.createdAt < currentMonthEnd)
+    .reduce((sum, entry) => sum + asNumber(entry.amount), 0);
 
   for (const revenue of revenues) {
     const row = toMapRow(shipmentMap, revenue.shipmentId, {
@@ -432,7 +473,18 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
     };
   });
 
-  const accountsPayable = [...payablesFromVendorCosts].sort((a, b) => {
+  const payablesFromGeneralExpenses = generalExpenses.map<AccountsPayableRow>((expense) => ({
+    id: expense.id,
+    vendor: "General Overhead",
+    shipment: "-",
+    reference: expense.customConcept?.trim() || expense.conceptCategory.replaceAll("_", " "),
+    amount: asNumber(expense.amount),
+    dueDate: expense.dueDate,
+    status: expense.status,
+    outstanding: expense.status === GeneralExpenseStatus.PAID ? 0 : asNumber(expense.amount),
+  }));
+
+  const accountsPayable = [...payablesFromVendorCosts, ...payablesFromGeneralExpenses].sort((a, b) => {
     const aTime = a.dueDate ? a.dueDate.getTime() : Number.MAX_SAFE_INTEGER;
     const bTime = b.dueDate ? b.dueDate.getTime() : Number.MAX_SAFE_INTEGER;
     return aTime - bTime;
@@ -448,11 +500,18 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
     .filter((payment) => payment.expenseId)
     .reduce((sum, payment) => sum + asNumber(payment.amount), 0);
 
+  const totalCostsCurrentMonth = shipmentCostsCurrentMonth + generalOverheadCurrentMonth;
   const overview: FinanceOverview = {
     revenueCurrentMonth,
-    costsCurrentMonth,
-    grossMargin: revenueCurrentMonth - costsCurrentMonth,
-    grossMarginPct: revenueCurrentMonth > 0 ? ((revenueCurrentMonth - costsCurrentMonth) / revenueCurrentMonth) * 100 : 0,
+    shipmentCostsCurrentMonth,
+    generalOverheadCurrentMonth,
+    totalCostsCurrentMonth,
+    grossMargin: revenueCurrentMonth - shipmentCostsCurrentMonth,
+    netOperatingResult: revenueCurrentMonth - totalCostsCurrentMonth,
+    grossMarginPct:
+      revenueCurrentMonth > 0
+        ? ((revenueCurrentMonth - shipmentCostsCurrentMonth) / revenueCurrentMonth) * 100
+        : 0,
     netCashFlow: currentMonthInflows - currentMonthOutflows,
     accountsReceivable: accountsReceivableTotal,
     accountsPayable: accountsPayableTotal,
@@ -567,6 +626,24 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
     });
   }
 
+  for (const expense of generalExpenses) {
+    if (expense.status === GeneralExpenseStatus.CANCELLED) {
+      continue;
+    }
+    forecastTransactions.push({
+      id: `gexp-${expense.id}`,
+      type: "OUTFLOW",
+      source: "GENERAL_OVERHEAD",
+      date: expense.dueDate ?? expense.createdAt,
+      amount: asNumber(expense.amount),
+      shipmentNumber: "-",
+      party: "General Overhead",
+      reference: expense.customConcept?.trim() || expense.conceptCategory.replaceAll("_", " "),
+      expectedDate: expense.dueDate ?? expense.createdAt,
+      actualDate: expense.status === GeneralExpenseStatus.PAID ? expense.dueDate ?? expense.createdAt : null,
+    });
+  }
+
   const groupedForecast = new Map<
     string,
     {
@@ -639,6 +716,7 @@ export async function listInvoicesForAr(companyId: string): Promise<InvoiceArLis
       shipmentId: true,
       dueDate: true,
       issueDate: true,
+      notes: true,
       status: true,
       afipStatus: true,
       afipCAE: true,
@@ -654,6 +732,7 @@ export async function listInvoicesForAr(companyId: string): Promise<InvoiceArLis
       },
       customer: {
         select: {
+          id: true,
           legalName: true,
         },
       },
@@ -664,9 +743,10 @@ export async function listInvoicesForAr(companyId: string): Promise<InvoiceArLis
   return invoices
     .filter((invoice) => Boolean(invoice.shipment) && Boolean(invoice.customer))
     .map((invoice) => ({
-    id: invoice.id,
-    invoiceNumber: invoice.invoiceNumber,
-    shipmentId: invoice.shipmentId,
+      id: invoice.id,
+      invoiceNumber: invoice.invoiceNumber,
+      shipmentId: invoice.shipmentId,
+      customerId: invoice.customer!.id,
       shipmentNumber: invoice.shipment!.shipmentNumber,
       customerName: invoice.customer!.legalName,
       currencyCode: invoice.currencyCode,
@@ -675,9 +755,40 @@ export async function listInvoicesForAr(companyId: string): Promise<InvoiceArLis
       total: asNumber(invoice.total),
       dueDate: invoice.dueDate,
       issueDate: invoice.issueDate,
+      notes: invoice.notes,
       status: invoice.status,
       afipStatus: invoice.afipStatus,
       afipCAE: invoice.afipCAE,
       afipNumber: invoice.afipNumber,
     }));
+}
+
+export async function listGeneralExpenses(companyId: string): Promise<GeneralExpenseRow[]> {
+  const rows = await prisma.generalExpense.findMany({
+    where: { companyId },
+    select: {
+      id: true,
+      conceptCategory: true,
+      customConcept: true,
+      amount: true,
+      currencyCode: true,
+      dueDate: true,
+      status: true,
+      notes: true,
+      createdAt: true,
+    },
+    orderBy: [{ dueDate: "asc" }, { createdAt: "desc" }],
+  });
+
+  return rows.map((row) => ({
+    id: row.id,
+    conceptCategory: row.conceptCategory,
+    customConcept: row.customConcept,
+    amount: asNumber(row.amount),
+    currencyCode: row.currencyCode,
+    dueDate: row.dueDate,
+    status: row.status,
+    notes: row.notes,
+    createdAt: row.createdAt,
+  }));
 }
