@@ -7,6 +7,10 @@ import { PermissionAction, PermissionResource, UserRole } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { baseRolePermissionMatrix } from "@/lib/permission-config";
 
+const authSecret =
+  process.env.NEXTAUTH_SECRET ??
+  (process.env.NODE_ENV !== "production" ? "local-dev-nextauth-secret" : undefined);
+
 const loginSchema = z.object({
   email: z.string().email(),
   password: z.string().min(6),
@@ -25,7 +29,7 @@ export const authOptions: NextAuthOptions = {
   session: {
     strategy: "jwt",
   },
-  secret: process.env.NEXTAUTH_SECRET,
+  secret: authSecret,
   pages: {
     signIn: "/login",
   },
