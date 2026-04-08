@@ -11,7 +11,8 @@ export async function getDashboardKpis(companyId = DEFAULT_COMPANY_ID) {
           companyId,
           status: {
             in: [
-              ShipmentStatus.OPEN,
+              ShipmentStatus.BOOKING_REQUESTED,
+              ShipmentStatus.BOOKING_CONFIRMED,
               ShipmentStatus.IN_TRANSIT,
               ShipmentStatus.ARRIVED,
               ShipmentStatus.CUSTOMS,

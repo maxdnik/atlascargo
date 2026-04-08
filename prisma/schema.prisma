@@ -62,12 +62,12 @@ enum TradeDirection {
 
 enum ShipmentStatus {
   DRAFT
-  OPEN
+  BOOKING_REQUESTED
+  BOOKING_CONFIRMED
   IN_TRANSIT
   ARRIVED
   CUSTOMS
   DELIVERED
-  INVOICED
   CLOSED
   CANCELLED
 }
@@ -343,6 +343,7 @@ model Incoterm {
   createdAt   DateTime @default(now())
 
   shipments Shipment[]
+  quotes    Quote[]
 }
 
 model Port {
@@ -474,6 +475,16 @@ model Quote {
   mode          TransportMode
   direction     TradeDirection
   status        QuoteStatus    @default(DRAFT)
+  incotermCode  String?
+  originCode    String?
+  destinationCode String?
+  pol           String?
+  pod           String?
+  airportOrigin String?
+  airportDestination String?
+  placeOfReceipt String?
+  placeOfDelivery String?
+  commodity     String?
   validUntil    DateTime?
   currencyCode  String
   exchangeRate  Decimal?
@@ -492,6 +503,7 @@ model Quote {
   branch   Branch?       @relation(fields: [branchId], references: [id], onDelete: SetNull)
   customer Customer      @relation(fields: [customerId], references: [id], onDelete: Restrict)
   owner    User?         @relation("QuoteOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  incoterm Incoterm?     @relation(fields: [incotermCode], references: [code], onDelete: SetNull)
   currency Currency      @relation(fields: [currencyCode], references: [code], onDelete: Restrict)
   items    QuoteItem[]
   charges  QuoteCharge[]
@@ -543,6 +555,21 @@ model Shipment {
   mode                 TransportMode
   direction            TradeDirection
   status               ShipmentStatus @default(DRAFT)
+  originCode           String?
+  destinationCode      String?
+  pol                  String?
+  pod                  String?
+  airportOrigin        String?
+  airportDestination   String?
+  placeOfReceipt       String?
+  placeOfDelivery      String?
+  shipperName          String?
+  consigneeName        String?
+  notifyPartyName      String?
+  agentOriginName      String?
+  agentDestinationName String?
+  carrierName          String?
+  vesselOrFlight       String?
   incotermCode         String?
   serviceLevel         String?
   referenceClient      String?
@@ -552,12 +579,18 @@ model Shipment {
   masterRef            String?
   commodity            String?
   packageCount         Int?
+  packageType          String?
   grossWeightKg        Decimal?
+  chargeableWeightKg   Decimal?
   volumeM3             Decimal?
+  containerCount       Int?
+  containerType        String?
+  cargoReadyDate       DateTime?
   etd                  DateTime?
   eta                  DateTime?
   atd                  DateTime?
   ata                  DateTime?
+  deliveredAt          DateTime?
   polPortId            String?
   podPortId            String?
   originAirportId      String?
