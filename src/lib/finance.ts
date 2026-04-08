@@ -260,7 +260,10 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
       },
     }),
     prisma.invoice.findMany({
-      where: { companyId },
+      where: {
+        companyId,
+        shipmentId: { not: null },
+      },
       select: {
         id: true,
         number: true,
