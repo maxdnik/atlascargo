@@ -95,7 +95,10 @@ export type FinanceModuleData = {
   arCustomers: Array<{ id: string; name: string }>;
 };
 
-const COMPLETE_INVOICE_STATUSES = new Set([FinanceStatus.PAID, FinanceStatus.CANCELLED]);
+const COMPLETE_INVOICE_STATUSES = new Set<FinanceStatus>([
+  FinanceStatus.PAID,
+  FinanceStatus.CANCELLED,
+]);
 
 function asNumber(value: unknown) {
   if (value === null || value === undefined) return 0;
@@ -179,7 +182,7 @@ function payableStatusLabel(
   today: Date,
   outstanding: number,
 ): "PAID" | "OVERDUE" | "CANCELLED" | FinanceStatus | FinancialRecordStatus {
-  if (outstanding <= 0 || status === FinancialRecordStatus.PAID || status === FinanceStatus.PAID) {
+  if (outstanding <= 0 || status === FinancialRecordStatus.PAID) {
     return "PAID";
   }
   if (status === FinanceStatus.CANCELLED) return "CANCELLED";
