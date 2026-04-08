@@ -1,4 +1,4 @@
-import { FinancialRecordStatus, InvoiceStatus, ShipmentStatus } from "@prisma/client";
+import { FinancialRecordStatus, ShipmentStatus, type InvoiceStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 
 type ShipmentFinanceRecord = {
@@ -111,15 +111,15 @@ export type InvoiceArListRow = {
   total: number;
   dueDate: Date | null;
   issueDate: Date | null;
-  status: InvoiceStatus;
+  status: string;
   afipStatus: string | null;
   afipCAE: string | null;
   afipNumber: string | null;
 };
 
-const COMPLETE_INVOICE_STATUSES = new Set<InvoiceStatus>([
-  InvoiceStatus.PAID,
-  InvoiceStatus.CANCELLED,
+const COMPLETE_INVOICE_STATUSES = new Set<string>([
+  "PAID",
+  "CANCELLED",
 ]);
 
 function asNumber(value: unknown) {
@@ -192,8 +192,8 @@ function invoiceStatusLabel(
   today: Date,
   outstanding: number,
 ): "PAID" | "OVERDUE" | "CANCELLED" | InvoiceStatus {
-  if (outstanding <= 0 || status === InvoiceStatus.PAID) return "PAID";
-  if (status === InvoiceStatus.CANCELLED) return "CANCELLED";
+  if (outstanding <= 0 || status === "PAID") return "PAID";
+  if (status === "CANCELLED") return "CANCELLED";
   if (dueDate && dayStart(dueDate) < dayStart(today)) return "OVERDUE";
   return status;
 }
@@ -207,7 +207,7 @@ function payableStatusLabel(
   if (outstanding <= 0 || status === FinancialRecordStatus.PAID) {
     return "PAID";
   }
-  if (status === InvoiceStatus.CANCELLED) return "CANCELLED";
+  if (status === "CANCELLED") return "CANCELLED";
   if (dueDate && dayStart(dueDate) < dayStart(today)) return "OVERDUE";
   return status;
 }
@@ -515,7 +515,7 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
     const forecastDate = actualDate ?? expectedDate;
 
     if (!forecastDate) continue;
-    if (invoice.status === InvoiceStatus.CANCELLED) continue;
+    if (invoice.status === "CANCELLED") continue;
 
     const movementAmount = outstanding > 0 ? outstanding : Math.max(paid, amount);
     const isAR = Boolean(invoice.customerId && invoice.customer);
