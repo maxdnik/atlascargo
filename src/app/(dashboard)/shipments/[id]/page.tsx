@@ -8,13 +8,13 @@ import { listCustomers } from "@/lib/customers";
 import { ShipmentForm } from "@/components/shipments/shipment-form";
 import { MilestoneTimeline } from "@/components/shipments/milestone-timeline";
 import {
-  deleteExpenseAction,
-  deleteRevenueAction,
-  deleteShipmentDocumentAction,
+  deleteExpenseDirectAction,
+  deleteRevenueDirectAction,
+  deleteShipmentDocumentDirectAction,
   updateShipmentAction,
-  upsertExpenseAction,
-  upsertRevenueAction,
-  upsertShipmentDocumentAction,
+  upsertExpenseDirectAction,
+  upsertRevenueDirectAction,
+  upsertShipmentDocumentDirectAction,
 } from "@/app/(dashboard)/shipments/actions";
 
 type ShipmentEditPageProps = {
@@ -76,7 +76,6 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
       currency: "USD",
       maximumFractionDigits: 2,
     }).format(value);
-  const toDateInput = (date: Date | null) => (date ? date.toISOString().slice(0, 10) : "");
   const marginLabel = (value: number | null) => (value === null ? "-" : `${value.toFixed(2)}%`);
 
   return (
@@ -319,7 +318,7 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
                     </td>
                     <td className="px-3 py-2">{doc.notes ?? "-"}</td>
                     <td className="px-3 py-2">
-                      <form action={deleteShipmentDocumentAction}>
+                      <form action={deleteShipmentDocumentDirectAction}>
                         <input type="hidden" name="id" value={doc.id} />
                         <button className="text-rose-700 hover:underline" type="submit">
                           Delete
@@ -334,7 +333,10 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
         </div>
 
         <div className="mt-4 grid gap-4 md:grid-cols-2">
-          <form action={upsertShipmentDocumentAction} className="space-y-2 rounded-md border border-slate-200 p-3">
+          <form
+            action={upsertShipmentDocumentDirectAction}
+            className="space-y-2 rounded-md border border-slate-200 p-3"
+          >
             <input type="hidden" name="shipmentId" value={shipment.id} />
             <p className="text-xs font-semibold uppercase text-slate-600">Add document</p>
             <select name="docType" required className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm">
@@ -395,7 +397,10 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
             </button>
           </form>
 
-          <form action={upsertShipmentDocumentAction} className="space-y-2 rounded-md border border-slate-200 p-3">
+          <form
+            action={upsertShipmentDocumentDirectAction}
+            className="space-y-2 rounded-md border border-slate-200 p-3"
+          >
             <input type="hidden" name="shipmentId" value={shipment.id} />
             <p className="text-xs font-semibold uppercase text-slate-600">Edit document</p>
             <select name="id" required className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm">
@@ -508,7 +513,7 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
                     </td>
                     <td className="px-3 py-2">{row.notes ?? "-"}</td>
                     <td className="px-3 py-2">
-                      <form action={deleteRevenueAction}>
+                      <form action={deleteRevenueDirectAction}>
                         <input type="hidden" name="id" value={row.id} />
                         <button className="text-rose-700 hover:underline" type="submit">
                           Delete
@@ -522,7 +527,10 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
           </table>
         </div>
         <div className="mt-4 grid gap-4 md:grid-cols-2">
-          <form action={upsertRevenueAction} className="space-y-2 rounded-md border border-slate-200 p-3">
+          <form
+            action={upsertRevenueDirectAction}
+            className="space-y-2 rounded-md border border-slate-200 p-3"
+          >
             <input type="hidden" name="shipmentId" value={shipment.id} />
             <p className="text-xs font-semibold uppercase text-slate-600">Add revenue</p>
             <input
@@ -577,7 +585,10 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
             </button>
           </form>
 
-          <form action={upsertRevenueAction} className="space-y-2 rounded-md border border-slate-200 p-3">
+          <form
+            action={upsertRevenueDirectAction}
+            className="space-y-2 rounded-md border border-slate-200 p-3"
+          >
             <input type="hidden" name="shipmentId" value={shipment.id} />
             <p className="text-xs font-semibold uppercase text-slate-600">Edit revenue</p>
             <select name="id" required className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm">
@@ -686,7 +697,7 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
                     </td>
                     <td className="px-3 py-2">{row.notes ?? "-"}</td>
                     <td className="px-3 py-2">
-                      <form action={deleteExpenseAction}>
+                      <form action={deleteExpenseDirectAction}>
                         <input type="hidden" name="id" value={row.id} />
                         <button className="text-rose-700 hover:underline" type="submit">
                           Delete
@@ -700,7 +711,10 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
           </table>
         </div>
         <div className="mt-4 grid gap-4 md:grid-cols-2">
-          <form action={upsertExpenseAction} className="space-y-2 rounded-md border border-slate-200 p-3">
+          <form
+            action={upsertExpenseDirectAction}
+            className="space-y-2 rounded-md border border-slate-200 p-3"
+          >
             <input type="hidden" name="shipmentId" value={shipment.id} />
             <p className="text-xs font-semibold uppercase text-slate-600">Add expense</p>
             <input
@@ -761,7 +775,10 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
             </button>
           </form>
 
-          <form action={upsertExpenseAction} className="space-y-2 rounded-md border border-slate-200 p-3">
+          <form
+            action={upsertExpenseDirectAction}
+            className="space-y-2 rounded-md border border-slate-200 p-3"
+          >
             <input type="hidden" name="shipmentId" value={shipment.id} />
             <p className="text-xs font-semibold uppercase text-slate-600">Edit expense</p>
             <select name="id" required className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm">

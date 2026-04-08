@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import {
+  DocumentType,
   DocumentRecordStatus,
   FinancialRecordStatus,
   MilestoneStatus,
@@ -86,6 +87,7 @@ export type ShipmentActionState = {
 const BASE_CURRENCY = "USD";
 const financialStatusOptions = Object.values(FinancialRecordStatus);
 const documentStatusOptions = Object.values(DocumentRecordStatus);
+const documentTypeOptions = Object.values(DocumentType);
 
 const defaultMilestones: Array<{ code: string; label: string; isCritical: boolean }> = [
   { code: "QUOTE_APPROVED", label: "Quote Approved", isCritical: false },
@@ -781,7 +783,7 @@ const milestoneUpdateSchema = z.object({
 const shipmentDocumentSchema = z.object({
   id: z.string().optional(),
   shipmentId: z.string().min(1),
-  docType: z.string().min(1).max(40),
+  docType: z.nativeEnum(DocumentType),
   fileName: z.string().min(2).max(180),
   referenceNumber: z.string().max(80).optional(),
   issueDate: z.string().optional(),
@@ -817,22 +819,11 @@ const expenseSchema = z.object({
 
 function parseDocumentType(value: FormDataEntryValue | null) {
   const normalized = String(value ?? "").trim().toUpperCase();
-  const allowed = [
-    "COMMERCIAL_INVOICE",
-    "PACKING_LIST",
-    "HBL",
-    "MBL",
-    "HAWB",
-    "MAWB",
-    "CERTIFICATE",
-    "PERMIT",
-    "POD",
-    "OTHER",
-  ];
-  if (!allowed.includes(normalized)) {
+  const matched = documentTypeOptions.find((option) => option === normalized);
+  if (!matched) {
     throw new Error("Invalid document type");
   }
-  return normalized as z.infer<typeof shipmentDocumentSchema>["docType"];
+  return matched;
 }
 
 function parseFinancialStatus(value: FormDataEntryValue | null) {
@@ -888,7 +879,17 @@ export async function upsertShipmentDocumentAction(
 
     const shipment = await assertShipmentAccess(ctx.companyId, parsed.shipmentId);
     const issueDate = toDate(parsed.issueDate);
-    const payload = {
+    const payload: {
+      shipmentId: string;
+      docType: DocumentType;
+      fileName: string;
+      referenceNumber: string | null;
+      issueDate: Date | null;
+      version: number;
+      status: DocumentRecordStatus;
+      notes: string | null;
+      uploadedById: string;
+    } = {
       shipmentId: shipment.id,
       docType: parsed.docType,
       fileName: parsed.fileName.trim(),
@@ -928,6 +929,13 @@ export async function upsertShipmentDocumentAction(
   }
 }
 
+export async function upsertShipmentDocumentDirectAction(formData: FormData): Promise<void> {
+  const result = await upsertShipmentDocumentAction({ success: false }, formData);
+  if (!result.success) {
+    throw new Error(result.error ?? "Unable to save shipment document");
+  }
+}
+
 export async function deleteShipmentDocumentAction(
   _prevState: ShipmentActionState,
   formData: FormData,
@@ -960,6 +968,13 @@ export async function deleteShipmentDocumentAction(
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     return { success: false, error: message };
+  }
+}
+
+export async function deleteShipmentDocumentDirectAction(formData: FormData): Promise<void> {
+  const result = await deleteShipmentDocumentAction({ success: false }, formData);
+  if (!result.success) {
+    throw new Error(result.error ?? "Unable to delete document");
   }
 }
 
@@ -1032,6 +1047,13 @@ export async function upsertRevenueAction(
   }
 }
 
+export async function upsertRevenueDirectAction(formData: FormData): Promise<void> {
+  const result = await upsertRevenueAction({ success: false }, formData);
+  if (!result.success) {
+    throw new Error(result.error ?? "Unable to save revenue record");
+  }
+}
+
 export async function deleteRevenueAction(
   _prevState: ShipmentActionState,
   formData: FormData,
@@ -1064,6 +1086,13 @@ export async function deleteRevenueAction(
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     return { success: false, error: message };
+  }
+}
+
+export async function deleteRevenueDirectAction(formData: FormData): Promise<void> {
+  const result = await deleteRevenueAction({ success: false }, formData);
+  if (!result.success) {
+    throw new Error(result.error ?? "Unable to delete revenue");
   }
 }
 
@@ -1137,6 +1166,13 @@ export async function upsertExpenseAction(
   }
 }
 
+export async function upsertExpenseDirectAction(formData: FormData): Promise<void> {
+  const result = await upsertExpenseAction({ success: false }, formData);
+  if (!result.success) {
+    throw new Error(result.error ?? "Unable to save expense record");
+  }
+}
+
 export async function deleteExpenseAction(
   _prevState: ShipmentActionState,
   formData: FormData,
@@ -1169,6 +1205,13 @@ export async function deleteExpenseAction(
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     return { success: false, error: message };
+  }
+}
+
+export async function deleteExpenseDirectAction(formData: FormData): Promise<void> {
+  const result = await deleteExpenseAction({ success: false }, formData);
+  if (!result.success) {
+    throw new Error(result.error ?? "Unable to delete expense");
   }
 }
 

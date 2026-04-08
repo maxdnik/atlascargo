@@ -88,6 +88,8 @@ export async function getShipmentById(companyId: string, id: string) {
           id: true,
           quoteNumber: true,
           status: true,
+          totalSell: true,
+          totalBuy: true,
           approvedAt: true,
           mode: true,
           direction: true,
