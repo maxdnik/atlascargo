@@ -27,6 +27,7 @@ type SidebarNavItem = {
   href: string;
   label: string;
   icon: keyof typeof iconMap;
+  section: "dashboard" | "customers" | "shipments" | "quotes" | "finance" | "reports" | "admin";
 };
 
 export type { SidebarNavItem };
@@ -36,17 +37,18 @@ type SidebarProps = {
 };
 
 const defaultNavItems: SidebarNavItem[] = [
-  { href: "/dashboard", label: "Dashboard", icon: "dashboard" },
-  { href: "/shipments", label: "Shipments", icon: "shipments" },
-  { href: "/quotes", label: "Quotes", icon: "quotes" },
-  { href: "/customers", label: "Customers", icon: "customers" },
-  { href: "/shipments?status=IN_TRANSIT", label: "Finance", icon: "finance" },
-  { href: "/quotes?status=APPROVED", label: "Reports", icon: "reports" },
-  { href: "/admin/users", label: "Admin", icon: "admin" },
+  { href: "/dashboard", label: "Dashboard", icon: "dashboard", section: "dashboard" },
+  { href: "/shipments", label: "Shipments", icon: "shipments", section: "shipments" },
+  { href: "/quotes", label: "Quotes", icon: "quotes", section: "quotes" },
+  { href: "/customers", label: "Customers", icon: "customers", section: "customers" },
+  { href: "/finance", label: "Finance", icon: "finance", section: "finance" },
+  { href: "/reports", label: "Reports", icon: "reports", section: "reports" },
+  { href: "/admin/users", label: "Admin", icon: "admin", section: "admin" },
 ];
 
 export function Sidebar({ items = defaultNavItems }: SidebarProps) {
   const pathname = usePathname();
+  const currentSection = (pathname.split("/").filter(Boolean)[0] ?? "") as SidebarNavItem["section"] | "";
 
   return (
     <aside className="z-30 hidden h-screen w-72 shrink-0 border-r border-slate-800 bg-slate-950 lg:sticky lg:top-0 lg:block">
@@ -59,9 +61,7 @@ export function Sidebar({ items = defaultNavItems }: SidebarProps) {
       </div>
       <nav className="space-y-1 p-4">
         {items.map((item) => {
-          const [itemPath] = item.href.split("?");
-          const isActive =
-            pathname === itemPath || pathname.startsWith(`${itemPath}/`);
+          const isActive = currentSection === item.section;
           const Icon = iconMap[item.icon];
 
           return (

@@ -29,28 +29,28 @@ export default async function DashboardLayout({
   const navItems: SidebarNavItem[] = [];
 
   if (visibleModules.has(PermissionResource.DASHBOARD)) {
-    navItems.push({ href: "/dashboard", label: "Dashboard", icon: "dashboard" });
+    navItems.push({ id: "dashboard", href: "/dashboard", label: "Dashboard", icon: "dashboard" });
   }
   if (visibleModules.has(PermissionResource.REPORTS)) {
-    navItems.push({ href: "/dashboard?view=reports", label: "Reports", icon: "reports" });
+    navItems.push({ id: "reports", href: "/reports", label: "Reports", icon: "reports" });
   }
   if (visibleModules.has(PermissionResource.CUSTOMERS)) {
-    navItems.push({ href: "/customers", label: "Customers", icon: "customers" });
+    navItems.push({ id: "customers", href: "/customers", label: "Customers", icon: "customers" });
   }
   if (visibleModules.has(PermissionResource.SHIPMENTS)) {
-    navItems.push({ href: "/shipments", label: "Shipments", icon: "shipments" });
+    navItems.push({ id: "shipments", href: "/shipments", label: "Shipments", icon: "shipments" });
   }
   if (visibleModules.has(PermissionResource.QUOTES)) {
-    navItems.push({ href: "/quotes", label: "Quotes", icon: "quotes" });
+    navItems.push({ id: "quotes", href: "/quotes", label: "Quotes", icon: "quotes" });
   }
   if (
     visibleModules.has(PermissionResource.REVENUE) ||
     visibleModules.has(PermissionResource.EXPENSES)
   ) {
-    navItems.push({ href: "/shipments?view=finance", label: "Finance", icon: "finance" });
+    navItems.push({ id: "finance", href: "/finance", label: "Finance", icon: "finance" });
   }
   if (visibleModules.has(PermissionResource.ADMIN)) {
-    navItems.push({ href: "/admin/users", label: "Admin", icon: "admin" });
+    navItems.push({ id: "admin", href: "/admin/users", label: "Admin", icon: "admin" });
   }
 
   return (
