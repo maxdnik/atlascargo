@@ -1,12 +1,11 @@
 import Link from "next/link";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { PermissionAction, PermissionResource } from "@prisma/client";
 import { listShipments } from "@/lib/shipments";
 import { listCustomers } from "@/lib/customers";
 import { prisma } from "@/lib/prisma";
-import { QuoteStatus } from "@prisma/client";
 import { deleteShipmentDirectAction } from "./actions";
 import { QuoteToShipmentForm } from "@/components/shipments/quote-to-shipment-form";
+import { enforcePagePermission } from "@/lib/permissions";
 
 type ShipmentsPageProps = {
   searchParams: Promise<{
@@ -37,23 +36,21 @@ function statusBadgeClass(status: string) {
 }
 
 export default async function ShipmentsPage({ searchParams }: ShipmentsPageProps) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user?.companyId) {
-    return null;
-  }
+  const session = await enforcePagePermission(PermissionResource.SHIPMENTS, PermissionAction.VIEW);
+  const companyId = session.companyId;
 
   const { q, mode, status, customerId } = await searchParams;
-  const shipments = await listShipments(session.user.companyId, {
+  const shipments = await listShipments(companyId, {
     q,
     mode,
     status,
     customerId,
   });
-  const customers = await listCustomers(session.user.companyId);
+  const customers = await listCustomers(companyId);
   const approvedQuotes = await prisma.quote.findMany({
     where: {
-      companyId: session.user.companyId,
-      status: QuoteStatus.APPROVED,
+      companyId,
+      status: "APPROVED",
       shipment: null,
     },
     select: {

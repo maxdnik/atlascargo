@@ -3,10 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
-import { authOptions, hasPermission } from "@/lib/auth";
+import { enforceActionPermission } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
-
-import { getServerSession } from "next-auth";
 
 const customerSchema = z.object({
   id: z.string().optional(),
@@ -27,20 +25,7 @@ export type CustomerActionState = {
 };
 
 async function getContext() {
-  const session = await getServerSession(authOptions);
-  if (!session?.user?.id || !session.user.companyId) {
-    throw new Error("Unauthorized");
-  }
-
-  if (!hasPermission(session.user.role, "CUSTOMERS", "UPDATE")) {
-    throw new Error("Insufficient permissions");
-  }
-
-  return {
-    userId: session.user.id,
-    companyId: session.user.companyId,
-    branchId: session.user.branchId,
-  };
+  return enforceActionPermission("CUSTOMERS", "EDIT");
 }
 
 export async function createCustomerAction(
@@ -49,6 +34,7 @@ export async function createCustomerAction(
 ): Promise<CustomerActionState> {
   try {
     const ctx = await getContext();
+    await enforceActionPermission("CUSTOMERS", "CREATE");
 
     const parsed = customerSchema.parse({
       code: formData.get("code"),
@@ -174,7 +160,7 @@ export async function deleteCustomerAction(
   formData: FormData,
 ): Promise<CustomerActionState> {
   try {
-    const ctx = await getContext();
+    const ctx = await enforceActionPermission("CUSTOMERS", "DELETE");
     const id = String(formData.get("id") ?? "");
     if (!id) {
       throw new Error("Customer id is required");

@@ -1,7 +1,9 @@
 import "dotenv/config";
 import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
-import { PrismaClient } from "@prisma/client";
+import { PermissionAction, PermissionResource, PrismaClient, UserRole } from "@prisma/client";
 import bcrypt from "bcryptjs";
+import { baseRolePermissionMatrix, roleDisplayName } from "@/lib/permission-config";
+import { resourceActionHints } from "@/lib/permission-hints";
 
 const connectionString = process.env.DATABASE_URL;
 
@@ -71,6 +73,88 @@ async function main() {
     },
   });
 
+  await prisma.userRoleAssignment.deleteMany({
+    where: {
+      userId: adminUser.id,
+    },
+  });
+
+  const allPermissions = await Promise.all(
+    Object.values(PermissionResource).flatMap((resource) =>
+      Object.values(PermissionAction).map(async (action) => {
+        const isRelevant = resourceActionHints[resource].includes(action);
+        return prisma.permission.upsert({
+          where: { resource_action: { resource, action } },
+          update: {
+            description: isRelevant ? `${resource} · ${action}` : `Optional: ${resource} · ${action}`,
+          },
+          create: {
+            resource,
+            action,
+            description: isRelevant ? `${resource} · ${action}` : `Optional: ${resource} · ${action}`,
+          },
+        });
+      }),
+    ),
+  );
+
+  const permissionByKey = new Map(
+    allPermissions.map((permission) => [`${permission.resource}:${permission.action}`, permission.id]),
+  );
+
+  const systemRoles = await Promise.all(
+    Object.values(UserRole).map((role) =>
+      prisma.role.upsert({
+        where: {
+          companyId_code: {
+            companyId: company.id,
+            code: role,
+          },
+        },
+        update: {
+          name: roleDisplayName[role],
+          isSystem: true,
+        },
+        create: {
+          companyId: company.id,
+          code: role,
+          name: roleDisplayName[role],
+          description: `${roleDisplayName[role]} system role`,
+          isSystem: true,
+        },
+      }),
+    ),
+  );
+
+  const roleByCode = new Map(systemRoles.map((role) => [role.code, role.id]));
+
+  for (const role of Object.values(UserRole)) {
+    const roleId = roleByCode.get(role);
+    if (!roleId) continue;
+
+    await prisma.rolePermission.deleteMany({ where: { roleId } });
+
+    const grants = baseRolePermissionMatrix[role] ?? [];
+    if (grants.length > 0) {
+      await prisma.rolePermission.createMany({
+        data: grants
+          .map(([resource, action]) => permissionByKey.get(`${resource}:${action}`))
+          .filter((permissionId): permissionId is string => Boolean(permissionId))
+          .map((permissionId) => ({ roleId, permissionId })),
+      });
+    }
+  }
+
+  const adminRoleId = roleByCode.get(UserRole.SUPER_ADMIN);
+  if (adminRoleId) {
+    await prisma.userRoleAssignment.create({
+      data: {
+        userId: adminUser.id,
+        roleId: adminRoleId,
+      },
+    });
+  }
+
   await prisma.userBranchAccess.upsert({
     where: { userId_branchId: { userId: adminUser.id, branchId: branchBA.id } },
     update: {},
@@ -82,23 +166,51 @@ async function main() {
     },
   });
 
-  await prisma.currency.createMany({
-    data: [
-      { code: "USD", name: "US Dollar", symbol: "$", decimals: 2, active: true },
-      { code: "EUR", name: "Euro", symbol: "EUR", decimals: 2, active: true },
-      { code: "ARS", name: "Argentine Peso", symbol: "AR$", decimals: 2, active: true },
-    ],
+  await prisma.currency.upsert({
+    where: { code: "USD" },
+    update: { name: "US Dollar", symbol: "$", decimals: 2, active: true },
+    create: { code: "USD", name: "US Dollar", symbol: "$", decimals: 2, active: true },
+  });
+  await prisma.currency.upsert({
+    where: { code: "EUR" },
+    update: { name: "Euro", symbol: "EUR", decimals: 2, active: true },
+    create: { code: "EUR", name: "Euro", symbol: "EUR", decimals: 2, active: true },
+  });
+  await prisma.currency.upsert({
+    where: { code: "ARS" },
+    update: { name: "Argentine Peso", symbol: "AR$", decimals: 2, active: true },
+    create: { code: "ARS", name: "Argentine Peso", symbol: "AR$", decimals: 2, active: true },
   });
 
-  await prisma.incoterm.createMany({
-    data: [
-      { code: "EXW", description: "Ex Works", active: true },
-      { code: "FOB", description: "Free On Board", active: true },
-      { code: "CIF", description: "Cost, Insurance and Freight", active: true },
-      { code: "DDP", description: "Delivered Duty Paid", active: true },
-      { code: "FCA", description: "Free Carrier", active: true },
-      { code: "CPT", description: "Carriage Paid To", active: true },
-    ],
+  await prisma.incoterm.upsert({
+    where: { code: "EXW" },
+    update: { description: "Ex Works", active: true },
+    create: { code: "EXW", description: "Ex Works", active: true },
+  });
+  await prisma.incoterm.upsert({
+    where: { code: "FOB" },
+    update: { description: "Free On Board", active: true },
+    create: { code: "FOB", description: "Free On Board", active: true },
+  });
+  await prisma.incoterm.upsert({
+    where: { code: "CIF" },
+    update: { description: "Cost, Insurance and Freight", active: true },
+    create: { code: "CIF", description: "Cost, Insurance and Freight", active: true },
+  });
+  await prisma.incoterm.upsert({
+    where: { code: "DDP" },
+    update: { description: "Delivered Duty Paid", active: true },
+    create: { code: "DDP", description: "Delivered Duty Paid", active: true },
+  });
+  await prisma.incoterm.upsert({
+    where: { code: "FCA" },
+    update: { description: "Free Carrier", active: true },
+    create: { code: "FCA", description: "Free Carrier", active: true },
+  });
+  await prisma.incoterm.upsert({
+    where: { code: "CPT" },
+    update: { description: "Carriage Paid To", active: true },
+    create: { code: "CPT", description: "Carriage Paid To", active: true },
   });
 
   const [portSha, portBue] = await Promise.all([
@@ -396,93 +508,118 @@ async function main() {
     },
   });
 
-  await prisma.shipmentLeg.createMany({
-    data: [
-      {
-        id: "leg_air_0001_1",
-        shipmentId: shipmentAirImport.id,
-        sequence: 1,
-        mode: "AIR",
-        originAirportId: airportMia.id,
-        destinationAirportId: airportEze.id,
-        carrierPartnerId: carrierAir.id,
-        vesselFlight: "LH511",
-        etd: new Date("2026-04-05T11:00:00.000Z"),
-        eta: new Date("2026-04-09T10:30:00.000Z"),
-        atd: new Date("2026-04-05T11:45:00.000Z"),
-      },
-      {
-        id: "leg_ocean_0002_1",
-        shipmentId: shipmentOceanExport.id,
-        sequence: 1,
-        mode: "OCEAN",
-        originPortId: portBue.id,
-        destinationPortId: portSha.id,
-        carrierPartnerId: carrierOcean.id,
-        vesselFlight: "MSK ARGENTINA V.120E",
-        etd: new Date("2026-04-12T20:00:00.000Z"),
-        eta: new Date("2026-05-18T08:00:00.000Z"),
-      },
-    ],
+  await prisma.shipmentLeg.upsert({
+    where: { id: "leg_air_0001_1" },
+    update: {},
+    create: {
+      id: "leg_air_0001_1",
+      shipmentId: shipmentAirImport.id,
+      sequence: 1,
+      mode: "AIR",
+      originAirportId: airportMia.id,
+      destinationAirportId: airportEze.id,
+      carrierPartnerId: carrierAir.id,
+      vesselFlight: "LH511",
+      etd: new Date("2026-04-05T11:00:00.000Z"),
+      eta: new Date("2026-04-09T10:30:00.000Z"),
+      atd: new Date("2026-04-05T11:45:00.000Z"),
+    },
   });
 
-  await prisma.shipmentMilestone.createMany({
-    data: [
-      {
-        id: "ms_air_0001_booking",
-        shipmentId: shipmentAirImport.id,
-        code: "BOOKING_CONFIRMED",
-        label: "Booking Confirmed",
-        expectedAt: new Date("2026-04-02T12:00:00.000Z"),
-        actualAt: new Date("2026-04-02T11:42:00.000Z"),
-        status: "COMPLETED",
-        isCritical: true,
-        assignedToId: adminUser.id,
-      },
-      {
-        id: "ms_air_0001_departed",
-        shipmentId: shipmentAirImport.id,
-        code: "DEPARTED",
-        label: "Flight Departed",
-        expectedAt: new Date("2026-04-05T11:00:00.000Z"),
-        actualAt: new Date("2026-04-05T11:45:00.000Z"),
-        status: "COMPLETED",
-        isCritical: true,
-        assignedToId: adminUser.id,
-      },
-      {
-        id: "ms_air_0001_arrival",
-        shipmentId: shipmentAirImport.id,
-        code: "ARRIVED",
-        label: "Arrived",
-        expectedAt: new Date("2026-04-09T10:30:00.000Z"),
-        status: "IN_PROGRESS",
-        isCritical: true,
-        assignedToId: adminUser.id,
-      },
-      {
-        id: "ms_ocean_0002_docs",
-        shipmentId: shipmentOceanExport.id,
-        code: "CUSTOMS_IN_PROGRESS",
-        label: "Customs In Progress",
-        expectedAt: new Date("2026-04-09T16:00:00.000Z"),
-        status: "DELAYED",
-        isCritical: true,
-        assignedToId: adminUser.id,
-        comment: "Original certificate of origin not received yet.",
-      },
-      {
-        id: "ms_ocean_0002_booking",
-        shipmentId: shipmentOceanExport.id,
-        code: "BOOKING_CONFIRMED",
-        label: "Booking Confirmed",
-        expectedAt: new Date("2026-04-08T12:00:00.000Z"),
-        actualAt: new Date("2026-04-08T11:55:00.000Z"),
-        status: "COMPLETED",
-        isCritical: true,
-        assignedToId: adminUser.id,
-      },
-    ],
+  await prisma.shipmentLeg.upsert({
+    where: { id: "leg_ocean_0002_1" },
+    update: {},
+    create: {
+      id: "leg_ocean_0002_1",
+      shipmentId: shipmentOceanExport.id,
+      sequence: 1,
+      mode: "OCEAN",
+      originPortId: portBue.id,
+      destinationPortId: portSha.id,
+      carrierPartnerId: carrierOcean.id,
+      vesselFlight: "MSK ARGENTINA V.120E",
+      etd: new Date("2026-04-12T20:00:00.000Z"),
+      eta: new Date("2026-05-18T08:00:00.000Z"),
+    },
+  });
+
+  await prisma.shipmentMilestone.upsert({
+    where: { id: "ms_air_0001_booking" },
+    update: {},
+    create: {
+      id: "ms_air_0001_booking",
+      shipmentId: shipmentAirImport.id,
+      code: "BOOKING_CONFIRMED",
+      label: "Booking Confirmed",
+      expectedAt: new Date("2026-04-02T12:00:00.000Z"),
+      actualAt: new Date("2026-04-02T11:42:00.000Z"),
+      status: "COMPLETED",
+      isCritical: true,
+      assignedToId: adminUser.id,
+    },
+  });
+
+  await prisma.shipmentMilestone.upsert({
+    where: { id: "ms_air_0001_departed" },
+    update: {},
+    create: {
+      id: "ms_air_0001_departed",
+      shipmentId: shipmentAirImport.id,
+      code: "DEPARTED",
+      label: "Flight Departed",
+      expectedAt: new Date("2026-04-05T11:00:00.000Z"),
+      actualAt: new Date("2026-04-05T11:45:00.000Z"),
+      status: "COMPLETED",
+      isCritical: true,
+      assignedToId: adminUser.id,
+    },
+  });
+
+  await prisma.shipmentMilestone.upsert({
+    where: { id: "ms_air_0001_arrival" },
+    update: {},
+    create: {
+      id: "ms_air_0001_arrival",
+      shipmentId: shipmentAirImport.id,
+      code: "ARRIVED",
+      label: "Arrived",
+      expectedAt: new Date("2026-04-09T10:30:00.000Z"),
+      status: "IN_PROGRESS",
+      isCritical: true,
+      assignedToId: adminUser.id,
+    },
+  });
+
+  await prisma.shipmentMilestone.upsert({
+    where: { id: "ms_ocean_0002_docs" },
+    update: {},
+    create: {
+      id: "ms_ocean_0002_docs",
+      shipmentId: shipmentOceanExport.id,
+      code: "CUSTOMS_IN_PROGRESS",
+      label: "Customs In Progress",
+      expectedAt: new Date("2026-04-09T16:00:00.000Z"),
+      status: "DELAYED",
+      isCritical: true,
+      assignedToId: adminUser.id,
+      comment: "Original certificate of origin not received yet.",
+    },
+  });
+
+  await prisma.shipmentMilestone.upsert({
+    where: { id: "ms_ocean_0002_booking" },
+    update: {},
+    create: {
+      id: "ms_ocean_0002_booking",
+      shipmentId: shipmentOceanExport.id,
+      code: "BOOKING_CONFIRMED",
+      label: "Booking Confirmed",
+      expectedAt: new Date("2026-04-08T12:00:00.000Z"),
+      actualAt: new Date("2026-04-08T11:55:00.000Z"),
+      status: "COMPLETED",
+      isCritical: true,
+      assignedToId: adminUser.id,
+    },
   });
 
   await prisma.shipmentDocument.upsert({

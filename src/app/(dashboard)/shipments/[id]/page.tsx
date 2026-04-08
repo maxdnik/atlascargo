@@ -1,8 +1,6 @@
-import { notFound, redirect } from "next/navigation";
-import { getServerSession } from "next-auth";
-import { DocumentRecordStatus, FinancialRecordStatus } from "@prisma/client";
+import { notFound } from "next/navigation";
+import { DocumentRecordStatus, FinancialRecordStatus, PermissionAction, PermissionResource } from "@prisma/client";
 
-import { authOptions } from "@/lib/auth";
 import { getShipmentById } from "@/lib/shipments";
 import { listCustomers } from "@/lib/customers";
 import { ShipmentForm } from "@/components/shipments/shipment-form";
@@ -16,6 +14,7 @@ import {
   upsertRevenueDirectAction,
   upsertShipmentDocumentDirectAction,
 } from "@/app/(dashboard)/shipments/actions";
+import { canUser, enforcePagePermission } from "@/lib/permissions";
 
 type ShipmentEditPageProps = {
   params: Promise<{
@@ -24,14 +23,87 @@ type ShipmentEditPageProps = {
 };
 
 export default async function ShipmentEditPage({ params }: ShipmentEditPageProps) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user?.companyId) {
-    redirect("/login");
-  }
+  const session = await enforcePagePermission(PermissionResource.SHIPMENTS, PermissionAction.VIEW);
+  const canEditShipments = await canUser(
+    { id: session.userId, role: session.role, companyId: session.companyId },
+    PermissionResource.SHIPMENTS,
+    PermissionAction.EDIT,
+  );
+  const canEditDocuments = await canUser(
+    { id: session.userId, role: session.role, companyId: session.companyId },
+    PermissionResource.DOCUMENTS,
+    PermissionAction.EDIT,
+  );
+  const canCreateDocuments = await canUser(
+    { id: session.userId, role: session.role, companyId: session.companyId },
+    PermissionResource.DOCUMENTS,
+    PermissionAction.CREATE,
+  );
+  const canDeleteDocuments = await canUser(
+    { id: session.userId, role: session.role, companyId: session.companyId },
+    PermissionResource.DOCUMENTS,
+    PermissionAction.DELETE,
+  );
+  const canViewDocuments = await canUser(
+    { id: session.userId, role: session.role, companyId: session.companyId },
+    PermissionResource.DOCUMENTS,
+    PermissionAction.VIEW,
+  );
+  const canViewRevenue = await canUser(
+    { id: session.userId, role: session.role, companyId: session.companyId },
+    PermissionResource.REVENUE,
+    PermissionAction.VIEW,
+  );
+  const canEditRevenue = await canUser(
+    { id: session.userId, role: session.role, companyId: session.companyId },
+    PermissionResource.REVENUE,
+    PermissionAction.EDIT,
+  );
+  const canCreateRevenue = await canUser(
+    { id: session.userId, role: session.role, companyId: session.companyId },
+    PermissionResource.REVENUE,
+    PermissionAction.CREATE,
+  );
+  const canDeleteRevenue = await canUser(
+    { id: session.userId, role: session.role, companyId: session.companyId },
+    PermissionResource.REVENUE,
+    PermissionAction.DELETE,
+  );
+  const canViewExpenses = await canUser(
+    { id: session.userId, role: session.role, companyId: session.companyId },
+    PermissionResource.EXPENSES,
+    PermissionAction.VIEW,
+  );
+  const canEditExpenses = await canUser(
+    { id: session.userId, role: session.role, companyId: session.companyId },
+    PermissionResource.EXPENSES,
+    PermissionAction.EDIT,
+  );
+  const canCreateExpenses = await canUser(
+    { id: session.userId, role: session.role, companyId: session.companyId },
+    PermissionResource.EXPENSES,
+    PermissionAction.CREATE,
+  );
+  const canDeleteExpenses = await canUser(
+    { id: session.userId, role: session.role, companyId: session.companyId },
+    PermissionResource.EXPENSES,
+    PermissionAction.DELETE,
+  );
+  const canViewFinancialSummary =
+    (await canUser(
+      { id: session.userId, role: session.role, companyId: session.companyId },
+      PermissionResource.REVENUE,
+      PermissionAction.VIEW_FINANCIALS,
+    )) ||
+    (await canUser(
+      { id: session.userId, role: session.role, companyId: session.companyId },
+      PermissionResource.EXPENSES,
+      PermissionAction.VIEW_FINANCIALS,
+    ));
 
   const { id } = await params;
-  const shipment = await getShipmentById(session.user.companyId, id);
-  const customers = await listCustomers(session.user.companyId);
+  const shipment = await getShipmentById(session.companyId, id);
+  const customers = await listCustomers(session.companyId);
   if (!shipment) {
     notFound();
   }
@@ -86,7 +158,8 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
           Update operational references, routing dates and responsible data.
         </p>
       </div>
-      <section className="rounded-xl border border-slate-200 bg-white p-5">
+      {canViewDocuments ? (
+        <section className="rounded-xl border border-slate-200 bg-white p-5">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-700">
           Header summary
         </h2>
@@ -102,7 +175,8 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
             </article>
           ))}
         </div>
-      </section>
+        </section>
+      ) : null}
 
       <section className="rounded-xl border border-slate-200 bg-white p-5">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-700">Quote reference</h2>
@@ -318,12 +392,16 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
                     </td>
                     <td className="px-3 py-2">{doc.notes ?? "-"}</td>
                     <td className="px-3 py-2">
-                      <form action={deleteShipmentDocumentDirectAction}>
-                        <input type="hidden" name="id" value={doc.id} />
-                        <button className="text-rose-700 hover:underline" type="submit">
-                          Delete
-                        </button>
-                      </form>
+                      {canDeleteDocuments ? (
+                        <form action={deleteShipmentDocumentDirectAction}>
+                          <input type="hidden" name="id" value={doc.id} />
+                          <button className="text-rose-700 hover:underline" type="submit">
+                            Delete
+                          </button>
+                        </form>
+                      ) : (
+                        <span className="text-slate-400">-</span>
+                      )}
                     </td>
                   </tr>
                 ))
@@ -333,146 +411,175 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
         </div>
 
         <div className="mt-4 grid gap-4 md:grid-cols-2">
-          <form
-            action={upsertShipmentDocumentDirectAction}
-            className="space-y-2 rounded-md border border-slate-200 p-3"
-          >
-            <input type="hidden" name="shipmentId" value={shipment.id} />
-            <p className="text-xs font-semibold uppercase text-slate-600">Add document</p>
-            <select name="docType" required className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm">
-              {[
-                "COMMERCIAL_INVOICE",
-                "PACKING_LIST",
-                "HBL",
-                "MBL",
-                "HAWB",
-                "MAWB",
-                "CERTIFICATE",
-                "PERMIT",
-                "POD",
-                "OTHER",
-              ].map((type) => (
-                <option key={type} value={type}>
-                  {type}
-                </option>
-              ))}
-            </select>
-            <input
-              name="fileName"
-              required
-              placeholder="File name"
-              className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-            />
-            <input
-              name="referenceNumber"
-              placeholder="Reference number"
-              className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-            />
-            <input type="date" name="issueDate" className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
-            <input
-              type="number"
-              min={1}
-              name="version"
-              defaultValue={1}
-              className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-            />
-            <select name="status" className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm">
-              {Object.values(DocumentRecordStatus).map((status) => (
-                <option key={status} value={status}>
-                  {status}
-                </option>
-              ))}
-            </select>
-            <textarea
-              name="notes"
-              rows={2}
-              placeholder="Internal notes"
-              className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-            />
-            <button
-              type="submit"
-              className="rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+          {canCreateDocuments ? (
+            <form
+              action={upsertShipmentDocumentDirectAction}
+              className="space-y-2 rounded-md border border-slate-200 p-3"
             >
-              Save document
-            </button>
-          </form>
+              <input type="hidden" name="shipmentId" value={shipment.id} />
+              <p className="text-xs font-semibold uppercase text-slate-600">Add document</p>
+              <select
+                name="docType"
+                required
+                className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+              >
+                {[
+                  "COMMERCIAL_INVOICE",
+                  "PACKING_LIST",
+                  "HBL",
+                  "MBL",
+                  "HAWB",
+                  "MAWB",
+                  "CERTIFICATE",
+                  "PERMIT",
+                  "POD",
+                  "OTHER",
+                ].map((type) => (
+                  <option key={type} value={type}>
+                    {type}
+                  </option>
+                ))}
+              </select>
+              <input
+                name="fileName"
+                required
+                placeholder="File name"
+                className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+              />
+              <input
+                name="referenceNumber"
+                placeholder="Reference number"
+                className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+              />
+              <input
+                type="date"
+                name="issueDate"
+                className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+              />
+              <input
+                type="number"
+                min={1}
+                name="version"
+                defaultValue={1}
+                className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+              />
+              <select name="status" className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm">
+                {Object.values(DocumentRecordStatus).map((status) => (
+                  <option key={status} value={status}>
+                    {status}
+                  </option>
+                ))}
+              </select>
+              <textarea
+                name="notes"
+                rows={2}
+                placeholder="Internal notes"
+                className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+              />
+              <button
+                type="submit"
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              >
+                Save document
+              </button>
+            </form>
+          ) : (
+            <div className="rounded-md border border-slate-200 p-3 text-sm text-slate-500">
+              No permission to add documents.
+            </div>
+          )}
 
-          <form
-            action={upsertShipmentDocumentDirectAction}
-            className="space-y-2 rounded-md border border-slate-200 p-3"
-          >
-            <input type="hidden" name="shipmentId" value={shipment.id} />
-            <p className="text-xs font-semibold uppercase text-slate-600">Edit document</p>
-            <select name="id" required className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm">
-              <option value="">Select existing document</option>
-              {shipment.documents.map((doc) => (
-                <option key={doc.id} value={doc.id}>
-                  {doc.docType} - {doc.fileName}
-                </option>
-              ))}
-            </select>
-            <select name="docType" required className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm">
-              {[
-                "COMMERCIAL_INVOICE",
-                "PACKING_LIST",
-                "HBL",
-                "MBL",
-                "HAWB",
-                "MAWB",
-                "CERTIFICATE",
-                "PERMIT",
-                "POD",
-                "OTHER",
-              ].map((type) => (
-                <option key={type} value={type}>
-                  {type}
-                </option>
-              ))}
-            </select>
-            <input
-              name="fileName"
-              required
-              placeholder="File name"
-              className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-            />
-            <input
-              name="referenceNumber"
-              placeholder="Reference number"
-              className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-            />
-            <input type="date" name="issueDate" className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
-            <input
-              type="number"
-              min={1}
-              name="version"
-              defaultValue={1}
-              className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-            />
-            <select name="status" className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm">
-              {Object.values(DocumentRecordStatus).map((status) => (
-                <option key={status} value={status}>
-                  {status}
-                </option>
-              ))}
-            </select>
-            <textarea
-              name="notes"
-              rows={2}
-              placeholder="Internal notes"
-              className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-            />
-            <button
-              type="submit"
-              className="rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+          {canEditDocuments ? (
+            <form
+              action={upsertShipmentDocumentDirectAction}
+              className="space-y-2 rounded-md border border-slate-200 p-3"
             >
-              Update document
-            </button>
-          </form>
+              <input type="hidden" name="shipmentId" value={shipment.id} />
+              <p className="text-xs font-semibold uppercase text-slate-600">Edit document</p>
+              <select name="id" required className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm">
+                <option value="">Select existing document</option>
+                {shipment.documents.map((doc) => (
+                  <option key={doc.id} value={doc.id}>
+                    {doc.docType} - {doc.fileName}
+                  </option>
+                ))}
+              </select>
+              <select
+                name="docType"
+                required
+                className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+              >
+                {[
+                  "COMMERCIAL_INVOICE",
+                  "PACKING_LIST",
+                  "HBL",
+                  "MBL",
+                  "HAWB",
+                  "MAWB",
+                  "CERTIFICATE",
+                  "PERMIT",
+                  "POD",
+                  "OTHER",
+                ].map((type) => (
+                  <option key={type} value={type}>
+                    {type}
+                  </option>
+                ))}
+              </select>
+              <input
+                name="fileName"
+                required
+                placeholder="File name"
+                className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+              />
+              <input
+                name="referenceNumber"
+                placeholder="Reference number"
+                className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+              />
+              <input
+                type="date"
+                name="issueDate"
+                className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+              />
+              <input
+                type="number"
+                min={1}
+                name="version"
+                defaultValue={1}
+                className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+              />
+              <select name="status" className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm">
+                {Object.values(DocumentRecordStatus).map((status) => (
+                  <option key={status} value={status}>
+                    {status}
+                  </option>
+                ))}
+              </select>
+              <textarea
+                name="notes"
+                rows={2}
+                placeholder="Internal notes"
+                className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+              />
+              <button
+                type="submit"
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              >
+                Update document
+              </button>
+            </form>
+          ) : (
+            <div className="rounded-md border border-slate-200 p-3 text-sm text-slate-500">
+              No permission to edit documents.
+            </div>
+          )}
         </div>
       </section>
 
-      <section className="rounded-xl border border-slate-200 bg-white p-5">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-700">Revenue</h2>
+      {canViewRevenue ? (
+        <section className="rounded-xl border border-slate-200 bg-white p-5">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-700">Revenue</h2>
         <div className="mt-3 overflow-hidden rounded-md border border-slate-200">
           <table className="min-w-full divide-y divide-slate-200">
             <thead className="bg-slate-50">
@@ -513,12 +620,16 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
                     </td>
                     <td className="px-3 py-2">{row.notes ?? "-"}</td>
                     <td className="px-3 py-2">
-                      <form action={deleteRevenueDirectAction}>
-                        <input type="hidden" name="id" value={row.id} />
-                        <button className="text-rose-700 hover:underline" type="submit">
-                          Delete
-                        </button>
-                      </form>
+                      {canDeleteRevenue ? (
+                        <form action={deleteRevenueDirectAction}>
+                          <input type="hidden" name="id" value={row.id} />
+                          <button className="text-rose-700 hover:underline" type="submit">
+                            Delete
+                          </button>
+                        </form>
+                      ) : (
+                        <span className="text-slate-400">-</span>
+                      )}
                     </td>
                   </tr>
                 ))
@@ -526,11 +637,12 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
             </tbody>
           </table>
         </div>
-        <div className="mt-4 grid gap-4 md:grid-cols-2">
-          <form
-            action={upsertRevenueDirectAction}
-            className="space-y-2 rounded-md border border-slate-200 p-3"
-          >
+          <div className="mt-4 grid gap-4 md:grid-cols-2">
+            {canCreateRevenue ? (
+              <form
+                action={upsertRevenueDirectAction}
+                className="space-y-2 rounded-md border border-slate-200 p-3"
+              >
             <input type="hidden" name="shipmentId" value={shipment.id} />
             <p className="text-xs font-semibold uppercase text-slate-600">Add revenue</p>
             <input
@@ -583,12 +695,18 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
             >
               Save revenue
             </button>
-          </form>
+              </form>
+            ) : (
+              <div className="rounded-md border border-slate-200 p-3 text-sm text-slate-500">
+                No permission to add revenue records.
+              </div>
+            )}
 
-          <form
-            action={upsertRevenueDirectAction}
-            className="space-y-2 rounded-md border border-slate-200 p-3"
-          >
+            {canEditRevenue ? (
+              <form
+                action={upsertRevenueDirectAction}
+                className="space-y-2 rounded-md border border-slate-200 p-3"
+              >
             <input type="hidden" name="shipmentId" value={shipment.id} />
             <p className="text-xs font-semibold uppercase text-slate-600">Edit revenue</p>
             <select name="id" required className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm">
@@ -649,12 +767,19 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
             >
               Update revenue
             </button>
-          </form>
-        </div>
-      </section>
+              </form>
+            ) : (
+              <div className="rounded-md border border-slate-200 p-3 text-sm text-slate-500">
+                No permission to edit revenue records.
+              </div>
+            )}
+          </div>
+        </section>
+      ) : null}
 
-      <section className="rounded-xl border border-slate-200 bg-white p-5">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-700">Expense</h2>
+      {canViewExpenses ? (
+        <section className="rounded-xl border border-slate-200 bg-white p-5">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-700">Expense</h2>
         <div className="mt-3 overflow-hidden rounded-md border border-slate-200">
           <table className="min-w-full divide-y divide-slate-200">
             <thead className="bg-slate-50">
@@ -697,12 +822,16 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
                     </td>
                     <td className="px-3 py-2">{row.notes ?? "-"}</td>
                     <td className="px-3 py-2">
-                      <form action={deleteExpenseDirectAction}>
-                        <input type="hidden" name="id" value={row.id} />
-                        <button className="text-rose-700 hover:underline" type="submit">
-                          Delete
-                        </button>
-                      </form>
+                      {canDeleteExpenses ? (
+                        <form action={deleteExpenseDirectAction}>
+                          <input type="hidden" name="id" value={row.id} />
+                          <button className="text-rose-700 hover:underline" type="submit">
+                            Delete
+                          </button>
+                        </form>
+                      ) : (
+                        <span className="text-slate-400">-</span>
+                      )}
                     </td>
                   </tr>
                 ))
@@ -710,11 +839,12 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
             </tbody>
           </table>
         </div>
-        <div className="mt-4 grid gap-4 md:grid-cols-2">
-          <form
-            action={upsertExpenseDirectAction}
-            className="space-y-2 rounded-md border border-slate-200 p-3"
-          >
+          <div className="mt-4 grid gap-4 md:grid-cols-2">
+            {canCreateExpenses ? (
+              <form
+                action={upsertExpenseDirectAction}
+                className="space-y-2 rounded-md border border-slate-200 p-3"
+              >
             <input type="hidden" name="shipmentId" value={shipment.id} />
             <p className="text-xs font-semibold uppercase text-slate-600">Add expense</p>
             <input
@@ -773,12 +903,18 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
             >
               Save expense
             </button>
-          </form>
+              </form>
+            ) : (
+              <div className="rounded-md border border-slate-200 p-3 text-sm text-slate-500">
+                No permission to add expense records.
+              </div>
+            )}
 
-          <form
-            action={upsertExpenseDirectAction}
-            className="space-y-2 rounded-md border border-slate-200 p-3"
-          >
+            {canEditExpenses ? (
+              <form
+                action={upsertExpenseDirectAction}
+                className="space-y-2 rounded-md border border-slate-200 p-3"
+              >
             <input type="hidden" name="shipmentId" value={shipment.id} />
             <p className="text-xs font-semibold uppercase text-slate-600">Edit expense</p>
             <select name="id" required className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm">
@@ -845,14 +981,21 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
             >
               Update expense
             </button>
-          </form>
-        </div>
-      </section>
+              </form>
+            ) : (
+              <div className="rounded-md border border-slate-200 p-3 text-sm text-slate-500">
+                No permission to edit expense records.
+              </div>
+            )}
+          </div>
+        </section>
+      ) : null}
 
-      <section className="rounded-xl border border-slate-200 bg-white p-5">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-700">
-          Financial summary
-        </h2>
+      {canViewFinancialSummary ? (
+        <section className="rounded-xl border border-slate-200 bg-white p-5">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-700">
+            Financial summary
+          </h2>
         <div className="mt-3 grid gap-3 md:grid-cols-2">
           <article className="rounded-md border border-slate-200 p-3">
             <p className="text-xs uppercase text-slate-500">From quote</p>
@@ -917,62 +1060,65 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
             </p>
           ) : null}
         </div>
-      </section>
+        </section>
+      ) : null}
 
-      <ShipmentForm
-        action={updateShipmentAction}
-        customers={customers}
-        submitLabel="Update shipment"
-        defaults={{
-          id: shipment.id,
-          shipmentNumber: shipment.shipmentNumber,
-          customerId: shipment.customerId,
-          quoteId: shipment.quoteId ?? undefined,
-          quoteNumber: shipment.quote?.quoteNumber,
-          mode: shipment.mode,
-          direction: shipment.direction,
-          status: shipment.status,
-          incotermCode: shipment.incotermCode ?? "",
-          serviceLevel: shipment.serviceLevel ?? "",
-          originCode: shipment.originCode ?? "",
-          destinationCode: shipment.destinationCode ?? "",
-          pol: shipment.pol ?? "",
-          pod: shipment.pod ?? "",
-          airportOrigin: shipment.airportOrigin ?? "",
-          airportDestination: shipment.airportDestination ?? "",
-          placeOfReceipt: shipment.placeOfReceipt ?? "",
-          placeOfDelivery: shipment.placeOfDelivery ?? "",
-          shipperName: shipment.shipperName ?? "",
-          consigneeName: shipment.consigneeName ?? "",
-          notifyPartyName: shipment.notifyPartyName ?? "",
-          agentOriginName: shipment.agentOriginName ?? "",
-          agentDestinationName: shipment.agentDestinationName ?? "",
-          carrierName: shipment.carrierName ?? "",
-          vesselOrFlight: shipment.vesselOrFlight ?? "",
-          referenceClient: shipment.referenceClient ?? "",
-          referenceInternal: shipment.referenceInternal ?? "",
-          bookingRef: shipment.bookingRef ?? "",
-          houseRef: shipment.houseRef ?? "",
-          masterRef: shipment.masterRef ?? "",
-          commodity: shipment.commodity ?? "",
-          packageCount: shipment.packageCount ?? undefined,
-          packageType: shipment.packageType ?? "",
-          grossWeightKg: shipment.grossWeightKg?.toString() ?? "",
-          chargeableWeightKg: shipment.chargeableWeightKg?.toString() ?? "",
-          volumeM3: shipment.volumeM3?.toString() ?? "",
-          containerCount: shipment.containerCount ?? undefined,
-          containerType: shipment.containerType ?? "",
-          cargoReadyDate: shipment.cargoReadyDate
-            ? shipment.cargoReadyDate.toISOString().slice(0, 16)
-            : "",
-          etd: shipment.etd ? shipment.etd.toISOString().slice(0, 16) : "",
-          eta: shipment.eta ? shipment.eta.toISOString().slice(0, 16) : "",
-          atd: shipment.atd ? shipment.atd.toISOString().slice(0, 16) : "",
-          ata: shipment.ata ? shipment.ata.toISOString().slice(0, 16) : "",
-          deliveredAt: shipment.deliveredAt ? shipment.deliveredAt.toISOString().slice(0, 16) : "",
-          notes: shipment.notes ?? "",
-        }}
-      />
+      {canEditShipments ? (
+        <ShipmentForm
+          action={updateShipmentAction}
+          customers={customers}
+          submitLabel="Update shipment"
+          defaults={{
+            id: shipment.id,
+            shipmentNumber: shipment.shipmentNumber,
+            customerId: shipment.customerId,
+            quoteId: shipment.quoteId ?? undefined,
+            quoteNumber: shipment.quote?.quoteNumber,
+            mode: shipment.mode,
+            direction: shipment.direction,
+            status: shipment.status,
+            incotermCode: shipment.incotermCode ?? "",
+            serviceLevel: shipment.serviceLevel ?? "",
+            originCode: shipment.originCode ?? "",
+            destinationCode: shipment.destinationCode ?? "",
+            pol: shipment.pol ?? "",
+            pod: shipment.pod ?? "",
+            airportOrigin: shipment.airportOrigin ?? "",
+            airportDestination: shipment.airportDestination ?? "",
+            placeOfReceipt: shipment.placeOfReceipt ?? "",
+            placeOfDelivery: shipment.placeOfDelivery ?? "",
+            shipperName: shipment.shipperName ?? "",
+            consigneeName: shipment.consigneeName ?? "",
+            notifyPartyName: shipment.notifyPartyName ?? "",
+            agentOriginName: shipment.agentOriginName ?? "",
+            agentDestinationName: shipment.agentDestinationName ?? "",
+            carrierName: shipment.carrierName ?? "",
+            vesselOrFlight: shipment.vesselOrFlight ?? "",
+            referenceClient: shipment.referenceClient ?? "",
+            referenceInternal: shipment.referenceInternal ?? "",
+            bookingRef: shipment.bookingRef ?? "",
+            houseRef: shipment.houseRef ?? "",
+            masterRef: shipment.masterRef ?? "",
+            commodity: shipment.commodity ?? "",
+            packageCount: shipment.packageCount ?? undefined,
+            packageType: shipment.packageType ?? "",
+            grossWeightKg: shipment.grossWeightKg?.toString() ?? "",
+            chargeableWeightKg: shipment.chargeableWeightKg?.toString() ?? "",
+            volumeM3: shipment.volumeM3?.toString() ?? "",
+            containerCount: shipment.containerCount ?? undefined,
+            containerType: shipment.containerType ?? "",
+            cargoReadyDate: shipment.cargoReadyDate
+              ? shipment.cargoReadyDate.toISOString().slice(0, 16)
+              : "",
+            etd: shipment.etd ? shipment.etd.toISOString().slice(0, 16) : "",
+            eta: shipment.eta ? shipment.eta.toISOString().slice(0, 16) : "",
+            atd: shipment.atd ? shipment.atd.toISOString().slice(0, 16) : "",
+            ata: shipment.ata ? shipment.ata.toISOString().slice(0, 16) : "",
+            deliveredAt: shipment.deliveredAt ? shipment.deliveredAt.toISOString().slice(0, 16) : "",
+            notes: shipment.notes ?? "",
+          }}
+        />
+      ) : null}
 
       <section className="rounded-xl border border-slate-200 bg-slate-50 p-5">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-700">

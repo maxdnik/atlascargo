@@ -1,8 +1,5 @@
-import { getServerSession } from "next-auth";
-import { redirect } from "next/navigation";
-
-import { authOptions } from "@/lib/auth";
 import { listCustomers } from "@/lib/customers";
+import { enforcePagePermission } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { QuoteStatus } from "@prisma/client";
 import { ShipmentForm } from "@/components/shipments/shipment-form";
@@ -15,18 +12,15 @@ type NewShipmentPageProps = {
 };
 
 export default async function NewShipmentPage({ searchParams }: NewShipmentPageProps) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user?.id || !session.user.companyId) {
-    redirect("/login");
-  }
+  const session = await enforcePagePermission("SHIPMENTS", "CREATE");
 
   const { quoteId } = await searchParams;
-  const customers = await listCustomers(session.user.companyId);
+  const customers = await listCustomers(session.companyId);
   const quote = quoteId
     ? await prisma.quote.findFirst({
         where: {
           id: quoteId,
-          companyId: session.user.companyId,
+          companyId: session.companyId,
           status: QuoteStatus.APPROVED,
           shipment: null,
         },

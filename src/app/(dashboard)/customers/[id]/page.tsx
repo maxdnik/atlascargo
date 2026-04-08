@@ -1,9 +1,10 @@
 import { notFound } from "next/navigation";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { PermissionAction, PermissionResource } from "@prisma/client";
+
 import { getCustomerById } from "@/lib/customers";
 import { CustomerForm } from "@/components/customers/customer-form";
 import { updateCustomerAction } from "@/app/(dashboard)/customers/actions";
+import { enforcePagePermission } from "@/lib/permissions";
 
 type CustomerEditPageProps = {
   params: Promise<{
@@ -12,14 +13,10 @@ type CustomerEditPageProps = {
 };
 
 export default async function CustomerEditPage({ params }: CustomerEditPageProps) {
-  const session = await getServerSession(authOptions);
+  const session = await enforcePagePermission(PermissionResource.CUSTOMERS, PermissionAction.EDIT);
   const { id } = await params;
 
-  if (!session?.user?.companyId) {
-    notFound();
-  }
-
-  const customer = await getCustomerById(session.user.companyId, id);
+  const customer = await getCustomerById(session.companyId, id);
   if (!customer) {
     notFound();
   }

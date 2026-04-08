@@ -1,8 +1,6 @@
 import Link from "next/link";
 import { QuoteStatus } from "@prisma/client";
-import { getServerSession } from "next-auth";
-
-import { authOptions } from "@/lib/auth";
+import { enforcePagePermission } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 
 function statusBadgeClass(status: QuoteStatus) {
@@ -14,13 +12,10 @@ function statusBadgeClass(status: QuoteStatus) {
 }
 
 export default async function QuotesPage() {
-  const session = await getServerSession(authOptions);
-  if (!session?.user?.companyId) {
-    return null;
-  }
+  const session = await enforcePagePermission("QUOTES", "VIEW");
 
   const quotes = await prisma.quote.findMany({
-    where: { companyId: session.user.companyId },
+    where: { companyId: session.companyId },
     select: {
       id: true,
       quoteNumber: true,

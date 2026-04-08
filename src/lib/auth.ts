@@ -5,6 +5,7 @@ import { z } from "zod";
 import { PermissionAction, PermissionResource, UserRole } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
+import { baseRolePermissionMatrix } from "@/lib/permission-config";
 
 const loginSchema = z.object({
   email: z.string().email(),
@@ -96,7 +97,7 @@ export const authOptions: NextAuthOptions = {
     async session({ session, token }) {
       if (session.user) {
         session.user.id = (token.id as string | undefined) ?? token.sub ?? "";
-        session.user.role = (token.role as UserRole | undefined) ?? UserRole.BRANCH_USER;
+        session.user.role = (token.role as UserRole | undefined) ?? UserRole.OPERATIONS;
         session.user.companyId = (token.companyId as string | undefined) ?? "";
         session.user.companyName = (token.companyName as string | undefined) ?? "";
         session.user.branchId = (token.branchId as string | null | undefined) ?? null;
@@ -107,96 +108,20 @@ export const authOptions: NextAuthOptions = {
   },
 };
 
-const rolePermissions: Record<UserRole, Array<[PermissionResource, PermissionAction]>> = {
-  [UserRole.SUPER_ADMIN]: [
-    [PermissionResource.DASHBOARD, PermissionAction.READ],
-    [PermissionResource.CUSTOMERS, PermissionAction.READ],
-    [PermissionResource.CUSTOMERS, PermissionAction.CREATE],
-    [PermissionResource.CUSTOMERS, PermissionAction.UPDATE],
-    [PermissionResource.CUSTOMERS, PermissionAction.DELETE],
-    [PermissionResource.QUOTES, PermissionAction.READ],
-    [PermissionResource.QUOTES, PermissionAction.CREATE],
-    [PermissionResource.QUOTES, PermissionAction.UPDATE],
-    [PermissionResource.QUOTES, PermissionAction.APPROVE],
-    [PermissionResource.SHIPMENTS, PermissionAction.READ],
-    [PermissionResource.SHIPMENTS, PermissionAction.CREATE],
-    [PermissionResource.SHIPMENTS, PermissionAction.UPDATE],
-    [PermissionResource.SHIPMENTS, PermissionAction.DELETE],
-    [PermissionResource.MILESTONES, PermissionAction.READ],
-    [PermissionResource.MILESTONES, PermissionAction.UPDATE],
-    [PermissionResource.FINANCE, PermissionAction.VIEW_FINANCE],
-    [PermissionResource.FINANCE, PermissionAction.VIEW_MARGIN],
-  ],
-  [UserRole.DIRECTOR]: [
-    [PermissionResource.DASHBOARD, PermissionAction.READ],
-    [PermissionResource.CUSTOMERS, PermissionAction.READ],
-    [PermissionResource.CUSTOMERS, PermissionAction.UPDATE],
-    [PermissionResource.QUOTES, PermissionAction.READ],
-    [PermissionResource.SHIPMENTS, PermissionAction.READ],
-    [PermissionResource.FINANCE, PermissionAction.VIEW_FINANCE],
-    [PermissionResource.FINANCE, PermissionAction.VIEW_MARGIN],
-  ],
-  [UserRole.SALES]: [
-    [PermissionResource.DASHBOARD, PermissionAction.READ],
-    [PermissionResource.CUSTOMERS, PermissionAction.READ],
-    [PermissionResource.CUSTOMERS, PermissionAction.CREATE],
-    [PermissionResource.CUSTOMERS, PermissionAction.UPDATE],
-    [PermissionResource.QUOTES, PermissionAction.READ],
-    [PermissionResource.QUOTES, PermissionAction.CREATE],
-    [PermissionResource.QUOTES, PermissionAction.UPDATE],
-  ],
-  [UserRole.PRICING]: [
-    [PermissionResource.DASHBOARD, PermissionAction.READ],
-    [PermissionResource.QUOTES, PermissionAction.READ],
-    [PermissionResource.QUOTES, PermissionAction.UPDATE],
-    [PermissionResource.QUOTES, PermissionAction.APPROVE],
-  ],
-  [UserRole.OPERATIONS]: [
-    [PermissionResource.DASHBOARD, PermissionAction.READ],
-    [PermissionResource.SHIPMENTS, PermissionAction.READ],
-    [PermissionResource.SHIPMENTS, PermissionAction.CREATE],
-    [PermissionResource.SHIPMENTS, PermissionAction.UPDATE],
-    [PermissionResource.MILESTONES, PermissionAction.READ],
-    [PermissionResource.MILESTONES, PermissionAction.UPDATE],
-  ],
-  [UserRole.CUSTOMER_SERVICE]: [
-    [PermissionResource.DASHBOARD, PermissionAction.READ],
-    [PermissionResource.CUSTOMERS, PermissionAction.READ],
-    [PermissionResource.SHIPMENTS, PermissionAction.READ],
-    [PermissionResource.MILESTONES, PermissionAction.READ],
-  ],
-  [UserRole.ADMIN]: [
-    [PermissionResource.DASHBOARD, PermissionAction.READ],
-    [PermissionResource.CUSTOMERS, PermissionAction.READ],
-    [PermissionResource.CUSTOMERS, PermissionAction.UPDATE],
-    [PermissionResource.FINANCE, PermissionAction.READ],
-  ],
-  [UserRole.FINANCE]: [
-    [PermissionResource.DASHBOARD, PermissionAction.READ],
-    [PermissionResource.FINANCE, PermissionAction.READ],
-    [PermissionResource.FINANCE, PermissionAction.CREATE],
-    [PermissionResource.FINANCE, PermissionAction.UPDATE],
-    [PermissionResource.FINANCE, PermissionAction.VIEW_FINANCE],
-    [PermissionResource.FINANCE, PermissionAction.VIEW_MARGIN],
-  ],
-  [UserRole.BRANCH_USER]: [
-    [PermissionResource.DASHBOARD, PermissionAction.READ],
-    [PermissionResource.CUSTOMERS, PermissionAction.READ],
-    [PermissionResource.SHIPMENTS, PermissionAction.READ],
-  ],
-  [UserRole.CUSTOMER_PORTAL]: [
-    [PermissionResource.SHIPMENTS, PermissionAction.READ],
-    [PermissionResource.DOCUMENTS, PermissionAction.READ],
-    [PermissionResource.MILESTONES, PermissionAction.READ],
-  ],
-};
-
 export function hasPermission(
   role: UserRole,
   resource: PermissionResource,
   action: PermissionAction,
 ) {
-  const permissions = rolePermissions[role] ?? [];
+  const permissions = baseRolePermissionMatrix[role] ?? [];
   return permissions.some(([r, a]) => r === resource && a === action);
+}
+
+export function canViewModule(role: UserRole, resource: PermissionResource) {
+  return hasPermission(role, resource, PermissionAction.VIEW);
+}
+
+export function getRolePermissionMatrix() {
+  return baseRolePermissionMatrix;
 }
 

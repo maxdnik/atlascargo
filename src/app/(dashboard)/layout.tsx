@@ -3,6 +3,10 @@ import { authOptions } from "@/lib/auth";
 import { getServerSession } from "next-auth";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Topbar } from "@/components/layout/topbar";
+import { PermissionAction, PermissionResource } from "@prisma/client";
+import { baseRolePermissionMatrix } from "@/lib/permission-config";
+import type { SidebarNavItem } from "@/components/layout/sidebar";
+import { getVisibleModulesForCurrentUser } from "@/lib/permissions";
 
 export default async function DashboardLayout({
   children,
@@ -15,10 +19,36 @@ export default async function DashboardLayout({
     redirect("/login");
   }
 
+  const moduleAccess = await getVisibleModulesForCurrentUser(session.user);
+  const fallbackViewModules = new Set(
+    (baseRolePermissionMatrix[session.user.role] ?? [])
+      .filter((entry) => entry[1] === PermissionAction.VIEW)
+      .map((entry) => entry[0]),
+  );
+  const visibleModules = moduleAccess.size > 0 ? moduleAccess : fallbackViewModules;
+  const navItems: SidebarNavItem[] = [];
+
+  if (visibleModules.has(PermissionResource.DASHBOARD)) {
+    navItems.push({ href: "/dashboard", label: "Dashboard", icon: "dashboard" });
+  }
+  if (visibleModules.has(PermissionResource.CUSTOMERS)) {
+    navItems.push({ href: "/customers", label: "Customers", icon: "customers" });
+  }
+  if (visibleModules.has(PermissionResource.QUOTES)) {
+    navItems.push({ href: "/quotes", label: "Quotes", icon: "quotes" });
+  }
+  if (visibleModules.has(PermissionResource.SHIPMENTS)) {
+    navItems.push({ href: "/shipments", label: "Shipments", icon: "shipments" });
+  }
+  if (visibleModules.has(PermissionResource.ADMIN)) {
+    navItems.push({ href: "/admin/users", label: "Admin · Users", icon: "adminUsers" });
+    navItems.push({ href: "/admin/permissions", label: "Admin · Permissions", icon: "adminPermissions" });
+  }
+
   return (
     <div className="min-h-screen bg-zinc-50">
       <div className="flex min-h-screen">
-        <Sidebar />
+        <Sidebar items={navItems} />
         <div className="flex min-h-screen min-w-0 flex-1 flex-col">
           <Topbar />
           <main className="flex-1 p-6">{children}</main>

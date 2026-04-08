@@ -1,8 +1,8 @@
 import Link from "next/link";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { PermissionAction, PermissionResource } from "@prisma/client";
 import { listCustomers } from "@/lib/customers";
 import { deleteCustomerDirectAction } from "./actions";
+import { enforcePagePermission } from "@/lib/permissions";
 
 type CustomersPageProps = {
   searchParams: Promise<{
@@ -11,14 +11,10 @@ type CustomersPageProps = {
 };
 
 export default async function CustomersPage({ searchParams }: CustomersPageProps) {
-  const session = await getServerSession(authOptions);
-
-  if (!session?.user?.companyId) {
-    return null;
-  }
+  const session = await enforcePagePermission(PermissionResource.CUSTOMERS, PermissionAction.VIEW);
 
   const { q } = await searchParams;
-  const customers = await listCustomers(session.user.companyId, q);
+  const customers = await listCustomers(session.companyId, q);
 
   return (
     <div className="space-y-6">

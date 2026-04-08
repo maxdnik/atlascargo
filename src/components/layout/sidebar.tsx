@@ -2,16 +2,46 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Building2, LayoutDashboard, Package, ShipWheel } from "lucide-react";
+import {
+  Building2,
+  LayoutDashboard,
+  Package,
+  ShieldCheck,
+  ShipWheel,
+  UsersRound,
+} from "lucide-react";
 
-const navItems = [
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/customers", label: "Customers", icon: Building2 },
-  { href: "/quotes", label: "Quotes", icon: Package },
-  { href: "/shipments", label: "Shipments", icon: ShipWheel },
+const iconMap = {
+  dashboard: LayoutDashboard,
+  customers: Building2,
+  quotes: Package,
+  shipments: ShipWheel,
+  adminUsers: UsersRound,
+  adminPermissions: ShieldCheck,
+} as const;
+
+type SidebarNavItem = {
+  href: string;
+  label: string;
+  icon: keyof typeof iconMap;
+};
+
+export type { SidebarNavItem };
+
+type SidebarProps = {
+  items?: SidebarNavItem[];
+};
+
+const defaultNavItems: SidebarNavItem[] = [
+  { href: "/dashboard", label: "Dashboard", icon: "dashboard" },
+  { href: "/customers", label: "Customers", icon: "customers" },
+  { href: "/quotes", label: "Quotes", icon: "quotes" },
+  { href: "/shipments", label: "Shipments", icon: "shipments" },
+  { href: "/admin/users", label: "Admin · Users", icon: "adminUsers" },
+  { href: "/admin/permissions", label: "Admin · Permissions", icon: "adminPermissions" },
 ];
 
-export function Sidebar() {
+export function Sidebar({ items = defaultNavItems }: SidebarProps) {
   const pathname = usePathname();
 
   return (
@@ -23,10 +53,10 @@ export function Sidebar() {
         <h1 className="text-lg font-semibold text-zinc-900">Freight Platform</h1>
       </div>
       <nav className="space-y-1 p-3">
-        {navItems.map((item) => {
+        {items.map((item) => {
           const isActive =
             pathname === item.href || pathname.startsWith(`${item.href}/`);
-          const Icon = item.icon;
+          const Icon = iconMap[item.icon];
 
           return (
             <Link

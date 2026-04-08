@@ -13,10 +13,8 @@ import {
   TransportMode,
 } from "@prisma/client";
 
-import { authOptions, hasPermission } from "@/lib/auth";
+import { enforceActionPermission } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
-
-import { getServerSession } from "next-auth";
 
 const TRANSPORT_MODES = ["AIR", "OCEAN", "ROAD"] as const;
 const TRADE_DIRECTIONS = ["IMPORT", "EXPORT"] as const;
@@ -282,22 +280,12 @@ function validateOperationalStatusRules(
 
 async function getContext(
   resource: "SHIPMENTS" | "MILESTONES" = "SHIPMENTS",
-  action: "CREATE" | "UPDATE" | "DELETE" = "UPDATE",
+  action: "CREATE" | "EDIT" | "DELETE" = "EDIT",
 ) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user?.id || !session.user.companyId) {
-    throw new Error("Unauthorized");
+  if (resource === "MILESTONES") {
+    return enforceActionPermission("SHIPMENTS", action);
   }
-
-  if (!hasPermission(session.user.role, resource, action)) {
-    throw new Error("Insufficient permissions");
-  }
-
-  return {
-    userId: session.user.id,
-    companyId: session.user.companyId,
-    branchId: session.user.branchId,
-  };
+  return enforceActionPermission(resource, action);
 }
 
 export async function createShipmentAction(
@@ -555,7 +543,7 @@ export async function updateShipmentAction(
   formData: FormData,
 ): Promise<ShipmentActionState> {
   try {
-    const ctx = await getContext("SHIPMENTS", "UPDATE");
+    const ctx = await getContext("SHIPMENTS", "EDIT");
     const id = String(formData.get("id") ?? "");
     if (!id) {
       throw new Error("Shipment id is required");
@@ -864,7 +852,7 @@ export async function upsertShipmentDocumentAction(
   formData: FormData,
 ): Promise<ShipmentActionState> {
   try {
-    const ctx = await getContext("SHIPMENTS", "UPDATE");
+    const ctx = await getContext("SHIPMENTS", "EDIT");
     const parsed = shipmentDocumentSchema.parse({
       id: formData.get("id") || undefined,
       shipmentId: formData.get("shipmentId"),
@@ -941,7 +929,7 @@ export async function deleteShipmentDocumentAction(
   formData: FormData,
 ): Promise<ShipmentActionState> {
   try {
-    const ctx = await getContext("SHIPMENTS", "UPDATE");
+    const ctx = await getContext("SHIPMENTS", "EDIT");
     const id = String(formData.get("id") ?? "").trim();
     if (!id) {
       throw new Error("Document id is required");
@@ -983,7 +971,7 @@ export async function upsertRevenueAction(
   formData: FormData,
 ): Promise<ShipmentActionState> {
   try {
-    const ctx = await getContext("SHIPMENTS", "UPDATE");
+    const ctx = await getContext("SHIPMENTS", "EDIT");
     const parsed = revenueSchema.parse({
       id: formData.get("id") || undefined,
       shipmentId: formData.get("shipmentId"),
@@ -1059,7 +1047,7 @@ export async function deleteRevenueAction(
   formData: FormData,
 ): Promise<ShipmentActionState> {
   try {
-    const ctx = await getContext("SHIPMENTS", "UPDATE");
+    const ctx = await getContext("SHIPMENTS", "EDIT");
     const id = String(formData.get("id") ?? "").trim();
     if (!id) {
       throw new Error("Revenue id is required");
@@ -1101,7 +1089,7 @@ export async function upsertExpenseAction(
   formData: FormData,
 ): Promise<ShipmentActionState> {
   try {
-    const ctx = await getContext("SHIPMENTS", "UPDATE");
+    const ctx = await getContext("SHIPMENTS", "EDIT");
     const parsed = expenseSchema.parse({
       id: formData.get("id") || undefined,
       shipmentId: formData.get("shipmentId"),
@@ -1178,7 +1166,7 @@ export async function deleteExpenseAction(
   formData: FormData,
 ): Promise<ShipmentActionState> {
   try {
-    const ctx = await getContext("SHIPMENTS", "UPDATE");
+    const ctx = await getContext("SHIPMENTS", "EDIT");
     const id = String(formData.get("id") ?? "").trim();
     if (!id) {
       throw new Error("Expense id is required");
@@ -1220,7 +1208,7 @@ export async function upsertMilestoneAction(
   formData: FormData,
 ): Promise<ShipmentActionState> {
   try {
-    const ctx = await getContext("MILESTONES", "UPDATE");
+    const ctx = await getContext("MILESTONES", "EDIT");
 
     const parsed = milestoneUpdateSchema.parse({
       shipmentId: formData.get("shipmentId"),

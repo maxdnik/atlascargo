@@ -1,14 +1,10 @@
-import { getServerSession } from "next-auth";
-import { redirect } from "next/navigation";
-import { authOptions } from "@/lib/auth";
 import { CustomerForm } from "@/components/customers/customer-form";
 import { createCustomerAction } from "../actions";
+import { enforcePagePermission } from "@/lib/permissions";
+import { PermissionAction, PermissionResource } from "@prisma/client";
 
 export default async function NewCustomerPage() {
-  const session = await getServerSession(authOptions);
-  if (!session?.user?.id) {
-    redirect("/login");
-  }
+  await enforcePagePermission(PermissionResource.CUSTOMERS, PermissionAction.CREATE);
 
   return (
     <div className="space-y-4">

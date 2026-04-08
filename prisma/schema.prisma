@@ -8,41 +8,33 @@ datasource db {
 
 enum UserRole {
   SUPER_ADMIN
-  DIRECTOR
+  MANAGEMENT
   SALES
-  PRICING
   OPERATIONS
   CUSTOMER_SERVICE
-  ADMIN
+  ADMINISTRATION
   FINANCE
-  BRANCH_USER
-  CUSTOMER_PORTAL
 }
 
 enum PermissionAction {
-  READ
+  VIEW
   CREATE
-  UPDATE
+  EDIT
   DELETE
   APPROVE
-  VIEW_FINANCE
-  VIEW_MARGIN
+  VIEW_FINANCIALS
 }
 
 enum PermissionResource {
   DASHBOARD
   CUSTOMERS
-  CONTACTS
-  CRM
   QUOTES
   SHIPMENTS
-  MILESTONES
   DOCUMENTS
-  FINANCE
+  REVENUE
+  EXPENSES
   REPORTS
-  SETTINGS
-  USERS
-  ROLES
+  ADMIN
 }
 
 enum TransportMode {
@@ -245,7 +237,7 @@ model User {
   email        String
   name         String
   passwordHash String
-  role         UserRole @default(BRANCH_USER)
+  role         UserRole @default(OPERATIONS)
   isActive     Boolean  @default(true)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
@@ -253,6 +245,7 @@ model User {
   company            Company              @relation(fields: [companyId], references: [id], onDelete: Cascade)
   branchAccesses     UserBranchAccess[]
   roles              UserRoleAssignment[]
+  permissionOverrides UserPermissionOverride[]
   ownedQuotes        Quote[]              @relation("QuoteOwner")
   ownedShipments     Shipment[]           @relation("ShipmentOwner")
   milestonesAssigned ShipmentMilestone[]  @relation("MilestoneAssignee")
@@ -268,7 +261,7 @@ model User {
 model Role {
   id          String   @id @default(cuid())
   companyId   String
-  code        String
+  code        UserRole
   name        String
   description String?
   isSystem    Boolean  @default(false)
@@ -290,6 +283,7 @@ model Permission {
   createdAt   DateTime           @default(now())
 
   rolePermissions RolePermission[]
+  userOverrides   UserPermissionOverride[]
 
   @@unique([resource, action])
 }
@@ -314,6 +308,21 @@ model UserRoleAssignment {
   role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
 
   @@unique([userId, roleId])
+}
+
+model UserPermissionOverride {
+  id           String   @id @default(cuid())
+  userId       String
+  permissionId String
+  allowed      Boolean
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, permissionId])
+  @@index([userId, allowed])
 }
 
 model UserBranchAccess {

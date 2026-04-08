@@ -1,11 +1,11 @@
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { PermissionAction, PermissionResource } from "@prisma/client";
 import { getDashboardKpis } from "@/lib/dashboard";
 import { formatNumber } from "@/lib/format";
+import { enforcePagePermission } from "@/lib/permissions";
 
 export default async function DashboardPage() {
-  const session = await getServerSession(authOptions);
-  const companyId = session?.user?.companyId ?? "";
+  const session = await enforcePagePermission(PermissionResource.DASHBOARD, PermissionAction.VIEW);
+  const companyId = session.companyId;
   const kpiData = await getDashboardKpis(companyId);
 
   const kpis = [
