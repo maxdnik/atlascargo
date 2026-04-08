@@ -57,7 +57,7 @@ export default async function DashboardLayout({
     <div className="min-h-screen bg-slate-100">
       <div className="flex min-h-screen">
         <Sidebar items={navItems} />
-        <div className="flex min-h-screen min-w-0 flex-1 flex-col">
+        <div className="flex min-h-screen min-w-0 flex-1 flex-col lg:pl-72">
           <Topbar />
           <main className="flex-1 p-6 lg:p-8">{children}</main>
         </div>
