@@ -1,0 +1,935 @@
+"use client";
+
+import { useMemo, useState } from "react";
+import {
+  AlertTriangle,
+  ArrowRight,
+  CheckCircle2,
+  CircleDot,
+  Clock3,
+  Plane,
+  ShipWheel,
+  Truck,
+} from "lucide-react";
+import { DocumentRecordStatus, FinancialRecordStatus, MilestoneStatus } from "@prisma/client";
+
+import type { ShipmentActionState } from "@/app/(dashboard)/shipments/actions";
+import { MilestoneTimeline } from "@/components/shipments/milestone-timeline";
+import { ShipmentForm } from "@/components/shipments/shipment-form";
+
+type ShipmentDetailViewModel = {
+  id: string;
+  customerId: string;
+  quoteId?: string | null;
+  incotermCode?: string | null;
+  serviceLevel?: string | null;
+  commodity?: string | null;
+  cargoReadyDate?: string | null;
+  referenceClient?: string | null;
+  referenceInternal?: string | null;
+  shipmentNumber: string;
+  status: string;
+  mode: string;
+  direction: string;
+  customerName: string;
+  quoteNumber?: string | null;
+  quoteStatus?: string | null;
+  originCode?: string | null;
+  destinationCode?: string | null;
+  etd?: string | null;
+  eta?: string | null;
+  atd?: string | null;
+  ata?: string | null;
+  deliveredAt?: string | null;
+  pol?: string | null;
+  pod?: string | null;
+  airportOrigin?: string | null;
+  airportDestination?: string | null;
+  placeOfReceipt?: string | null;
+  placeOfDelivery?: string | null;
+  shipperName?: string | null;
+  consigneeName?: string | null;
+  notifyPartyName?: string | null;
+  agentOriginName?: string | null;
+  agentDestinationName?: string | null;
+  carrierName?: string | null;
+  vesselOrFlight?: string | null;
+  bookingRef?: string | null;
+  houseRef?: string | null;
+  masterRef?: string | null;
+  packageCount?: number | null;
+  packageType?: string | null;
+  grossWeightKg?: string | null;
+  chargeableWeightKg?: string | null;
+  volumeM3?: string | null;
+  containerCount?: number | null;
+  containerType?: string | null;
+  notes?: string | null;
+  quoteFinancials: {
+    hasQuote: boolean;
+    quotedSell: number | null;
+    quotedCost: number | null;
+    quotedMarginAmount: number | null;
+    quotedMarginPct: number | null;
+  };
+  actualFinancials: {
+    totalRevenue: number;
+    totalExpense: number;
+    grossProfit: number;
+    marginPct: number | null;
+    hasFinancials: boolean;
+    marginDeteriorated: boolean;
+  };
+  milestones: Array<{
+    id: string;
+    code: string;
+    label: string;
+    status: MilestoneStatus;
+    expectedAt?: string | null;
+    actualAt?: string | null;
+    comment?: string | null;
+  }>;
+  documents: Array<{
+    id: string;
+    docType: string;
+    fileName: string;
+    referenceNumber?: string | null;
+    issueDate?: string | null;
+    version: number;
+    status: DocumentRecordStatus;
+    notes?: string | null;
+  }>;
+  revenues: Array<{
+    id: string;
+    concept: string;
+    amount: number;
+    currencyCode: string;
+    exchangeRate?: number | null;
+    amountBase: number;
+    dueDate?: string | null;
+    status: FinancialRecordStatus;
+    notes?: string | null;
+  }>;
+  expenses: Array<{
+    id: string;
+    supplierName: string;
+    concept: string;
+    amount: number;
+    currencyCode: string;
+    exchangeRate?: number | null;
+    amountBase: number;
+    dueDate?: string | null;
+    status: FinancialRecordStatus;
+    notes?: string | null;
+  }>;
+};
+
+type Props = {
+  shipment: ShipmentDetailViewModel;
+  customers: Array<{ id: string; code: string; legalName: string }>;
+  permissions: {
+    canEditShipments: boolean;
+    canViewDocuments: boolean;
+    canCreateDocuments: boolean;
+    canEditDocuments: boolean;
+    canDeleteDocuments: boolean;
+    canViewRevenue: boolean;
+    canCreateRevenue: boolean;
+    canEditRevenue: boolean;
+    canDeleteRevenue: boolean;
+    canViewExpenses: boolean;
+    canCreateExpenses: boolean;
+    canEditExpenses: boolean;
+    canDeleteExpenses: boolean;
+    canViewFinancialSummary: boolean;
+  };
+  actions: {
+    updateShipmentAction: (
+      prevState: ShipmentActionState,
+      formData: FormData,
+    ) => Promise<ShipmentActionState>;
+    deleteShipmentDocumentDirectAction: (formData: FormData) => Promise<void>;
+    upsertShipmentDocumentDirectAction: (formData: FormData) => Promise<void>;
+    deleteRevenueDirectAction: (formData: FormData) => Promise<void>;
+    upsertRevenueDirectAction: (formData: FormData) => Promise<void>;
+    deleteExpenseDirectAction: (formData: FormData) => Promise<void>;
+    upsertExpenseDirectAction: (formData: FormData) => Promise<void>;
+  };
+};
+
+function statusLabel(status: string) {
+  return status
+    .toLowerCase()
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function shipmentStatusClass(status: string) {
+  if (status === "DELIVERED" || status === "CLOSED") return "bg-emerald-100 text-emerald-800";
+  if (status === "CUSTOMS" || status === "BOOKING_CONFIRMED") return "bg-amber-100 text-amber-800";
+  if (status === "IN_TRANSIT" || status === "ARRIVED") return "bg-sky-100 text-sky-700";
+  if (status === "CANCELLED") return "bg-rose-100 text-rose-700";
+  return "bg-slate-100 text-slate-700";
+}
+
+function money(value: number) {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 2,
+  }).format(value);
+}
+
+function pct(value: number | null) {
+  return value === null ? "-" : `${value.toFixed(2)}%`;
+}
+
+function dateLabel(value?: string | Date | null, withTime = false) {
+  if (!value) return "-";
+  const parsed = new Date(value);
+  return withTime ? parsed.toLocaleString() : parsed.toLocaleDateString();
+}
+
+function modeIcon(mode: string) {
+  if (mode === "AIR") return <Plane className="h-4 w-4" />;
+  if (mode === "ROAD") return <Truck className="h-4 w-4" />;
+  return <ShipWheel className="h-4 w-4" />;
+}
+
+function milestoneVisual(status: MilestoneStatus) {
+  if (status === "COMPLETED") return <CheckCircle2 className="h-4 w-4 text-emerald-500" />;
+  if (status === "IN_PROGRESS") return <CircleDot className="h-4 w-4 text-sky-500" />;
+  if (status === "DELAYED") return <AlertTriangle className="h-4 w-4 text-amber-500" />;
+  return <Clock3 className="h-4 w-4 text-slate-400" />;
+}
+
+function statusPill(
+  status: DocumentRecordStatus | FinancialRecordStatus,
+  map: Record<string, string>,
+) {
+  return (
+    <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${map[status]}`}>
+      {status}
+    </span>
+  );
+}
+
+const docStatusClass: Record<DocumentRecordStatus, string> = {
+  PENDING: "bg-amber-100 text-amber-800",
+  RECEIVED: "bg-sky-100 text-sky-700",
+  VERIFIED: "bg-emerald-100 text-emerald-700",
+};
+
+const financeStatusClass: Record<FinancialRecordStatus, string> = {
+  PENDING: "bg-amber-100 text-amber-800",
+  INVOICED: "bg-sky-100 text-sky-700",
+  PAID: "bg-emerald-100 text-emerald-700",
+};
+
+function Card({ title, subtitle, children }: { title: string; subtitle?: string; children: React.ReactNode }) {
+  return (
+    <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm">
+      <div className="mb-4">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-600">{title}</h2>
+        {subtitle ? <p className="mt-1 text-xs text-slate-500">{subtitle}</p> : null}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function Empty({ label }: { label: string }) {
+  return (
+    <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
+      {label}
+    </div>
+  );
+}
+
+export function ShipmentDetailClient({
+  shipment,
+  customers,
+  permissions,
+  actions,
+}: Props) {
+  const {
+    canEditShipments,
+    canViewDocuments,
+    canCreateDocuments,
+    canEditDocuments,
+    canDeleteDocuments,
+    canViewRevenue,
+    canCreateRevenue,
+    canEditRevenue,
+    canDeleteRevenue,
+    canViewExpenses,
+    canCreateExpenses,
+    canEditExpenses,
+    canDeleteExpenses,
+    canViewFinancialSummary,
+  } = permissions;
+  const {
+    updateShipmentAction,
+    deleteShipmentDocumentDirectAction: deleteDocumentAction,
+    upsertShipmentDocumentDirectAction: upsertDocumentAction,
+    deleteRevenueDirectAction: deleteRevenueAction,
+    upsertRevenueDirectAction: upsertRevenueAction,
+    deleteExpenseDirectAction: deleteExpenseAction,
+    upsertExpenseDirectAction: upsertExpenseAction,
+  } = actions;
+  const defaultTab: "documents" | "revenue" | "expenses" = canViewDocuments
+    ? "documents"
+    : canViewRevenue
+      ? "revenue"
+      : "expenses";
+  const [activeTab, setActiveTab] = useState<"documents" | "revenue" | "expenses">(defaultTab);
+
+  const timeline = useMemo(() => {
+    return shipment.milestones.map((m, index) => ({
+      ...m,
+      isCurrent: m.status === "IN_PROGRESS",
+      isDone: m.status === "COMPLETED",
+      isLast: index === shipment.milestones.length - 1,
+    }));
+  }, [shipment.milestones]);
+
+  const routeLabel = `${shipment.originCode ?? "-"} → ${shipment.destinationCode ?? "-"}`;
+
+  return (
+    <div className="space-y-5">
+      <section className="rounded-2xl border border-slate-200/80 bg-white p-6 shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="space-y-2">
+            <p className="text-xs font-medium uppercase tracking-[0.16em] text-slate-500">Shipment File</p>
+            <h1 className="text-3xl font-semibold tracking-tight text-slate-900">{shipment.shipmentNumber}</h1>
+            <div className="flex flex-wrap items-center gap-2 text-sm text-slate-600">
+              <span className="inline-flex items-center gap-1 rounded-lg bg-slate-100 px-2.5 py-1 font-medium text-slate-700">
+                {modeIcon(shipment.mode)}
+                {shipment.mode}
+              </span>
+              <span>{shipment.direction}</span>
+              <span className="text-slate-400">•</span>
+              <span>{shipment.customerName}</span>
+              <span className="text-slate-400">•</span>
+              <span className="inline-flex items-center gap-1 font-medium text-slate-700">
+                <span>{shipment.originCode ?? "-"}</span>
+                <ArrowRight className="h-3.5 w-3.5 text-slate-400" />
+                <span>{shipment.destinationCode ?? "-"}</span>
+              </span>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span
+              className={`inline-flex rounded-full px-3 py-1.5 text-sm font-semibold ${shipmentStatusClass(shipment.status)}`}
+            >
+              {statusLabel(shipment.status)}
+            </span>
+            {shipment.quoteNumber ? (
+              <span className="inline-flex rounded-full bg-indigo-100 px-3 py-1.5 text-sm font-semibold text-indigo-700">
+                Quote {shipment.quoteNumber}
+              </span>
+            ) : null}
+          </div>
+        </div>
+        <div className="mt-5 grid gap-3 md:grid-cols-4">
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+            <p className="text-xs text-slate-500">Route</p>
+            <p className="mt-1 text-sm font-semibold text-slate-900">{routeLabel}</p>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+            <p className="text-xs text-slate-500">ETD</p>
+            <p className="mt-1 text-sm font-semibold text-slate-900">{dateLabel(shipment.etd)}</p>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+            <p className="text-xs text-slate-500">ETA</p>
+            <p className="mt-1 text-sm font-semibold text-slate-900">{dateLabel(shipment.eta)}</p>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+            <p className="text-xs text-slate-500">Delivered</p>
+            <p className="mt-1 text-sm font-semibold text-slate-900">{dateLabel(shipment.deliveredAt, true)}</p>
+          </div>
+        </div>
+      </section>
+
+      <div className="grid gap-5 xl:grid-cols-3">
+        <div className="space-y-5 xl:col-span-2">
+          <Card title="Tracking timeline" subtitle="Live operational checkpoint sequence">
+            {timeline.length === 0 ? (
+              <Empty label="No milestones configured for this shipment." />
+            ) : (
+              <ol className="space-y-3">
+                {timeline.map((step) => (
+                  <li key={step.id} className="relative pl-7">
+                    {!step.isLast ? (
+                      <span className="absolute left-[7px] top-5 h-10 w-px bg-slate-200" aria-hidden />
+                    ) : null}
+                    <span className="absolute left-0 top-1">{milestoneVisual(step.status)}</span>
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-sm font-semibold text-slate-900">{step.label}</p>
+                        <span className="text-xs font-medium text-slate-500">{step.status}</span>
+                      </div>
+                      <div className="mt-1 grid gap-1 text-xs text-slate-600 md:grid-cols-2">
+                        <p>Expected: {dateLabel(step.expectedAt, true)}</p>
+                        <p>Actual: {dateLabel(step.actualAt, true)}</p>
+                      </div>
+                    </div>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </Card>
+
+          <Card title="Routing & references">
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="space-y-1 text-sm text-slate-700">
+                <p>
+                  <span className="font-medium text-slate-900">POL / POD:</span> {shipment.pol ?? "-"} /{" "}
+                  {shipment.pod ?? "-"}
+                </p>
+                <p>
+                  <span className="font-medium text-slate-900">Airport O/D:</span> {shipment.airportOrigin ?? "-"} /{" "}
+                  {shipment.airportDestination ?? "-"}
+                </p>
+                <p>
+                  <span className="font-medium text-slate-900">Receipt / Delivery:</span>{" "}
+                  {(shipment.placeOfReceipt ?? "-") + " / " + (shipment.placeOfDelivery ?? "-")}
+                </p>
+                <p>
+                  <span className="font-medium text-slate-900">Carrier:</span> {shipment.carrierName ?? "-"}
+                </p>
+                <p>
+                  <span className="font-medium text-slate-900">Vessel / Flight:</span>{" "}
+                  {shipment.vesselOrFlight ?? "-"}
+                </p>
+                <p>
+                  <span className="font-medium text-slate-900">Incoterm:</span> {shipment.incotermCode ?? "-"}
+                </p>
+              </div>
+              <div className="space-y-1 text-sm text-slate-700">
+                <p>
+                  <span className="font-medium text-slate-900">Booking Ref:</span> {shipment.bookingRef ?? "-"}
+                </p>
+                <p>
+                  <span className="font-medium text-slate-900">House Ref:</span> {shipment.houseRef ?? "-"}
+                </p>
+                <p>
+                  <span className="font-medium text-slate-900">Master Ref:</span> {shipment.masterRef ?? "-"}
+                </p>
+                <p>
+                  <span className="font-medium text-slate-900">ATD:</span> {dateLabel(shipment.atd, true)}
+                </p>
+                <p>
+                  <span className="font-medium text-slate-900">ATA:</span> {dateLabel(shipment.ata, true)}
+                </p>
+                <p>
+                  <span className="font-medium text-slate-900">Cargo Ready:</span>{" "}
+                  {dateLabel(shipment.cargoReadyDate, true)}
+                </p>
+              </div>
+            </div>
+          </Card>
+
+          <Card title="Parties & cargo">
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="space-y-1 text-sm text-slate-700">
+                <p>
+                  <span className="font-medium text-slate-900">Shipper:</span> {shipment.shipperName ?? "-"}
+                </p>
+                <p>
+                  <span className="font-medium text-slate-900">Consignee:</span> {shipment.consigneeName ?? "-"}
+                </p>
+                <p>
+                  <span className="font-medium text-slate-900">Notify Party:</span> {shipment.notifyPartyName ?? "-"}
+                </p>
+                <p>
+                  <span className="font-medium text-slate-900">Origin Agent:</span>{" "}
+                  {shipment.agentOriginName ?? "-"}
+                </p>
+                <p>
+                  <span className="font-medium text-slate-900">Destination Agent:</span>{" "}
+                  {shipment.agentDestinationName ?? "-"}
+                </p>
+              </div>
+              <div className="space-y-1 text-sm text-slate-700">
+                <p>
+                  <span className="font-medium text-slate-900">Packages:</span>{" "}
+                  {(shipment.packageCount ?? "-") + " " + (shipment.packageType ?? "")}
+                </p>
+                <p>
+                  <span className="font-medium text-slate-900">Gross Weight:</span>{" "}
+                  {shipment.grossWeightKg ?? "-"} kg
+                </p>
+                <p>
+                  <span className="font-medium text-slate-900">Chargeable Weight:</span>{" "}
+                  {shipment.chargeableWeightKg ?? "-"} kg
+                </p>
+                <p>
+                  <span className="font-medium text-slate-900">Volume:</span> {shipment.volumeM3 ?? "-"} m3
+                </p>
+                <p>
+                  <span className="font-medium text-slate-900">Containers:</span>{" "}
+                  {(shipment.containerCount ?? "-") + " / " + (shipment.containerType ?? "-")}
+                </p>
+                <p>
+                  <span className="font-medium text-slate-900">Commodity:</span> {shipment.commodity ?? "-"}
+                </p>
+              </div>
+            </div>
+            <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
+              <span className="font-medium text-slate-800">Notes:</span> {shipment.notes ?? "-"}
+            </div>
+          </Card>
+        </div>
+
+        <div className="space-y-5">
+          {canViewFinancialSummary ? (
+            <Card title="Financial summary" subtitle="Quoted vs actual performance">
+              <div className="space-y-2 text-sm">
+                {shipment.quoteFinancials.hasQuote ? (
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    <p className="text-xs uppercase tracking-wide text-slate-500">Quoted</p>
+                    <p className="mt-1">Sell: <span className="font-semibold text-slate-900">{money(shipment.quoteFinancials.quotedSell ?? 0)}</span></p>
+                    <p>Cost: <span className="font-semibold text-slate-900">{money(shipment.quoteFinancials.quotedCost ?? 0)}</span></p>
+                    <p>
+                      Margin:{" "}
+                      <span className="font-semibold text-slate-900">
+                        {money(shipment.quoteFinancials.quotedMarginAmount ?? 0)} ({pct(shipment.quoteFinancials.quotedMarginPct)})
+                      </span>
+                    </p>
+                  </div>
+                ) : (
+                  <Empty label="No linked quote for financial benchmark." />
+                )}
+
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                  <p className="text-xs uppercase tracking-wide text-slate-500">Actual</p>
+                  <p className="mt-1">Revenue: <span className="font-semibold text-slate-900">{money(shipment.actualFinancials.totalRevenue)}</span></p>
+                  <p>Expense: <span className="font-semibold text-slate-900">{money(shipment.actualFinancials.totalExpense)}</span></p>
+                  <p>
+                    Gross Profit:{" "}
+                    <span
+                      className={`font-semibold ${
+                        shipment.actualFinancials.grossProfit < 0 ? "text-rose-700" : "text-slate-900"
+                      }`}
+                    >
+                      {money(shipment.actualFinancials.grossProfit)}
+                    </span>
+                  </p>
+                  <p>
+                    Margin: <span className="font-semibold text-slate-900">{pct(shipment.actualFinancials.marginPct)}</span>
+                  </p>
+                </div>
+
+                {!shipment.actualFinancials.hasFinancials ? (
+                  <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                    Incomplete financials: add revenue and expense records.
+                  </p>
+                ) : null}
+                {shipment.actualFinancials.marginDeteriorated ? (
+                  <p className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                    Alert: actual gross profit is below quoted margin.
+                  </p>
+                ) : null}
+              </div>
+            </Card>
+          ) : null}
+
+          <Card title="Operational records">
+            <div className="mb-3 flex gap-2">
+              {canViewDocuments ? (
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("documents")}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-medium ${
+                    activeTab === "documents"
+                      ? "bg-sky-600 text-white"
+                      : "border border-slate-200 text-slate-600"
+                  }`}
+                >
+                  Documents
+                </button>
+              ) : null}
+              {canViewRevenue ? (
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("revenue")}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-medium ${
+                    activeTab === "revenue" ? "bg-sky-600 text-white" : "border border-slate-200 text-slate-600"
+                  }`}
+                >
+                  Revenue
+                </button>
+              ) : null}
+              {canViewExpenses ? (
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("expenses")}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-medium ${
+                    activeTab === "expenses" ? "bg-sky-600 text-white" : "border border-slate-200 text-slate-600"
+                  }`}
+                >
+                  Expenses
+                </button>
+              ) : null}
+            </div>
+
+            {activeTab === "documents" && canViewDocuments ? (
+              <div className="space-y-3">
+                {shipment.documents.length === 0 ? (
+                  <Empty label="No documents registered yet." />
+                ) : (
+                  shipment.documents.map((doc) => (
+                    <div key={doc.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="space-y-0.5">
+                          <p className="text-sm font-semibold text-slate-900">{doc.fileName}</p>
+                          <p className="text-xs text-slate-600">{doc.docType}</p>
+                        </div>
+                        {statusPill(doc.status, docStatusClass)}
+                      </div>
+                      <div className="mt-2 text-xs text-slate-600">
+                        <p>Ref: {doc.referenceNumber ?? "-"}</p>
+                        <p>Issue: {dateLabel(doc.issueDate)}</p>
+                        <p>Version: {doc.version}</p>
+                      </div>
+                      {canDeleteDocuments ? (
+                        <form action={deleteDocumentAction} className="mt-2">
+                          <input type="hidden" name="id" value={doc.id} />
+                          <button
+                            className="text-xs font-medium text-rose-700 transition hover:underline"
+                            type="submit"
+                          >
+                            Delete
+                          </button>
+                        </form>
+                      ) : null}
+                    </div>
+                  ))
+                )}
+
+                {canCreateDocuments ? (
+                  <form action={upsertDocumentAction} className="space-y-2 rounded-xl border border-slate-200 p-3">
+                    <input type="hidden" name="shipmentId" value={shipment.id} />
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Add document</p>
+                    <select name="docType" required className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm">
+                      {["COMMERCIAL_INVOICE","PACKING_LIST","HBL","MBL","HAWB","MAWB","CERTIFICATE","PERMIT","POD","OTHER"].map((type) => (
+                        <option key={type} value={type}>{type}</option>
+                      ))}
+                    </select>
+                    <input name="fileName" required placeholder="File name" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                    <input name="referenceNumber" placeholder="Reference number" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                    <input type="date" name="issueDate" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                    <input type="number" min={1} name="version" defaultValue={1} className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                    <select name="status" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm">
+                      {Object.values(DocumentRecordStatus).map((status) => <option key={status} value={status}>{status}</option>)}
+                    </select>
+                    <textarea name="notes" rows={2} placeholder="Internal notes" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                    <button type="submit" className="rounded-lg bg-sky-600 px-3 py-2 text-xs font-medium text-white transition hover:bg-sky-500">
+                      Save document
+                    </button>
+                  </form>
+                ) : null}
+
+                {canEditDocuments && shipment.documents.length > 0 ? (
+                  <form action={upsertDocumentAction} className="space-y-2 rounded-xl border border-slate-200 p-3">
+                    <input type="hidden" name="shipmentId" value={shipment.id} />
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Edit document</p>
+                    <select name="id" required className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm">
+                      <option value="">Select document</option>
+                      {shipment.documents.map((doc) => (
+                        <option key={doc.id} value={doc.id}>{doc.docType} - {doc.fileName}</option>
+                      ))}
+                    </select>
+                    <select name="docType" required className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm">
+                      {["COMMERCIAL_INVOICE","PACKING_LIST","HBL","MBL","HAWB","MAWB","CERTIFICATE","PERMIT","POD","OTHER"].map((type) => (
+                        <option key={type} value={type}>{type}</option>
+                      ))}
+                    </select>
+                    <input name="fileName" required placeholder="File name" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                    <input name="referenceNumber" placeholder="Reference number" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                    <input type="date" name="issueDate" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                    <input type="number" min={1} name="version" defaultValue={1} className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                    <select name="status" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm">
+                      {Object.values(DocumentRecordStatus).map((status) => <option key={status} value={status}>{status}</option>)}
+                    </select>
+                    <textarea name="notes" rows={2} placeholder="Internal notes" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                    <button type="submit" className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-50">
+                      Update document
+                    </button>
+                  </form>
+                ) : null}
+              </div>
+            ) : null}
+
+            {activeTab === "revenue" && canViewRevenue ? (
+              <div className="space-y-3">
+                {shipment.revenues.length === 0 ? (
+                  <Empty label="No revenue records yet." />
+                ) : (
+                  shipment.revenues.map((row) => (
+                    <div key={row.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <p className="text-sm font-semibold text-slate-900">{row.concept}</p>
+                          <p className="text-xs text-slate-600">
+                            {row.amount.toFixed(2)} {row.currencyCode} · Base {row.amountBase.toFixed(2)}
+                          </p>
+                        </div>
+                        {statusPill(row.status, financeStatusClass)}
+                      </div>
+                      <p className="mt-2 text-xs text-slate-600">Due: {dateLabel(row.dueDate)}</p>
+                      {canDeleteRevenue ? (
+                        <form action={deleteRevenueAction} className="mt-2">
+                          <input type="hidden" name="id" value={row.id} />
+                          <button className="text-xs font-medium text-rose-700 transition hover:underline" type="submit">
+                            Delete
+                          </button>
+                        </form>
+                      ) : null}
+                    </div>
+                  ))
+                )}
+
+                {canCreateRevenue ? (
+                  <form action={upsertRevenueAction} className="space-y-2 rounded-xl border border-slate-200 p-3">
+                    <input type="hidden" name="shipmentId" value={shipment.id} />
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Add revenue</p>
+                    <input name="concept" required placeholder="Concept" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                    <div className="grid grid-cols-3 gap-2">
+                      <input type="number" step="0.01" min={0} name="amount" required placeholder="Amount" className="rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                      <select name="currencyCode" className="rounded-lg border border-slate-200 px-3 py-2 text-sm">
+                        <option value="USD">USD</option>
+                        <option value="EUR">EUR</option>
+                        <option value="ARS">ARS</option>
+                      </select>
+                      <input type="number" step="0.0001" min={0} name="exchangeRate" placeholder="Rate" className="rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                    </div>
+                    <input type="date" name="dueDate" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                    <select name="status" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm">
+                      {Object.values(FinancialRecordStatus).map((status) => <option key={status} value={status}>{status}</option>)}
+                    </select>
+                    <textarea name="notes" rows={2} placeholder="Notes" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                    <button type="submit" className="rounded-lg bg-sky-600 px-3 py-2 text-xs font-medium text-white transition hover:bg-sky-500">
+                      Save revenue
+                    </button>
+                  </form>
+                ) : null}
+
+                {canEditRevenue && shipment.revenues.length > 0 ? (
+                  <form action={upsertRevenueAction} className="space-y-2 rounded-xl border border-slate-200 p-3">
+                    <input type="hidden" name="shipmentId" value={shipment.id} />
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Edit revenue</p>
+                    <select name="id" required className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm">
+                      <option value="">Select revenue record</option>
+                      {shipment.revenues.map((row) => (
+                        <option key={row.id} value={row.id}>
+                          {row.concept} - {row.amount.toFixed(2)} {row.currencyCode}
+                        </option>
+                      ))}
+                    </select>
+                    <input name="concept" required placeholder="Concept" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                    <div className="grid grid-cols-3 gap-2">
+                      <input type="number" step="0.01" min={0} name="amount" required placeholder="Amount" className="rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                      <select name="currencyCode" className="rounded-lg border border-slate-200 px-3 py-2 text-sm">
+                        <option value="USD">USD</option>
+                        <option value="EUR">EUR</option>
+                        <option value="ARS">ARS</option>
+                      </select>
+                      <input type="number" step="0.0001" min={0} name="exchangeRate" placeholder="Rate" className="rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                    </div>
+                    <input type="date" name="dueDate" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                    <select name="status" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm">
+                      {Object.values(FinancialRecordStatus).map((status) => <option key={status} value={status}>{status}</option>)}
+                    </select>
+                    <textarea name="notes" rows={2} placeholder="Notes" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                    <button type="submit" className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-50">
+                      Update revenue
+                    </button>
+                  </form>
+                ) : null}
+              </div>
+            ) : null}
+
+            {activeTab === "expenses" && canViewExpenses ? (
+              <div className="space-y-3">
+                {shipment.expenses.length === 0 ? (
+                  <Empty label="No expense records yet." />
+                ) : (
+                  shipment.expenses.map((row) => (
+                    <div key={row.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <p className="text-sm font-semibold text-slate-900">{row.supplierName}</p>
+                          <p className="text-xs text-slate-600">
+                            {row.concept} · {row.amount.toFixed(2)} {row.currencyCode} · Base {row.amountBase.toFixed(2)}
+                          </p>
+                        </div>
+                        {statusPill(row.status, financeStatusClass)}
+                      </div>
+                      <p className="mt-2 text-xs text-slate-600">Due: {dateLabel(row.dueDate)}</p>
+                      {canDeleteExpenses ? (
+                        <form action={deleteExpenseAction} className="mt-2">
+                          <input type="hidden" name="id" value={row.id} />
+                          <button className="text-xs font-medium text-rose-700 transition hover:underline" type="submit">
+                            Delete
+                          </button>
+                        </form>
+                      ) : null}
+                    </div>
+                  ))
+                )}
+
+                {canCreateExpenses ? (
+                  <form action={upsertExpenseAction} className="space-y-2 rounded-xl border border-slate-200 p-3">
+                    <input type="hidden" name="shipmentId" value={shipment.id} />
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Add expense</p>
+                    <input name="supplierName" required placeholder="Supplier name" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                    <input name="concept" required placeholder="Concept" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                    <div className="grid grid-cols-3 gap-2">
+                      <input type="number" step="0.01" min={0} name="amount" required placeholder="Amount" className="rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                      <select name="currencyCode" className="rounded-lg border border-slate-200 px-3 py-2 text-sm">
+                        <option value="USD">USD</option>
+                        <option value="EUR">EUR</option>
+                        <option value="ARS">ARS</option>
+                      </select>
+                      <input type="number" step="0.0001" min={0} name="exchangeRate" placeholder="Rate" className="rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                    </div>
+                    <input type="date" name="dueDate" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                    <select name="status" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm">
+                      {Object.values(FinancialRecordStatus).map((status) => <option key={status} value={status}>{status}</option>)}
+                    </select>
+                    <textarea name="notes" rows={2} placeholder="Notes" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                    <button type="submit" className="rounded-lg bg-sky-600 px-3 py-2 text-xs font-medium text-white transition hover:bg-sky-500">
+                      Save expense
+                    </button>
+                  </form>
+                ) : null}
+
+                {canEditExpenses && shipment.expenses.length > 0 ? (
+                  <form action={upsertExpenseAction} className="space-y-2 rounded-xl border border-slate-200 p-3">
+                    <input type="hidden" name="shipmentId" value={shipment.id} />
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Edit expense</p>
+                    <select name="id" required className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm">
+                      <option value="">Select expense record</option>
+                      {shipment.expenses.map((row) => (
+                        <option key={row.id} value={row.id}>
+                          {row.supplierName} - {row.concept}
+                        </option>
+                      ))}
+                    </select>
+                    <input name="supplierName" required placeholder="Supplier name" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                    <input name="concept" required placeholder="Concept" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                    <div className="grid grid-cols-3 gap-2">
+                      <input type="number" step="0.01" min={0} name="amount" required placeholder="Amount" className="rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                      <select name="currencyCode" className="rounded-lg border border-slate-200 px-3 py-2 text-sm">
+                        <option value="USD">USD</option>
+                        <option value="EUR">EUR</option>
+                        <option value="ARS">ARS</option>
+                      </select>
+                      <input type="number" step="0.0001" min={0} name="exchangeRate" placeholder="Rate" className="rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                    </div>
+                    <input type="date" name="dueDate" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                    <select name="status" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm">
+                      {Object.values(FinancialRecordStatus).map((status) => <option key={status} value={status}>{status}</option>)}
+                    </select>
+                    <textarea name="notes" rows={2} placeholder="Notes" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                    <button type="submit" className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-50">
+                      Update expense
+                    </button>
+                  </form>
+                ) : null}
+              </div>
+            ) : null}
+          </Card>
+        </div>
+      </div>
+
+      <Card title="Milestones update panel" subtitle="Update milestone dates and progress notes">
+        <MilestoneTimeline
+          shipmentId={shipment.id}
+          milestones={shipment.milestones.map((milestone) => ({
+            id: milestone.id,
+            code: milestone.code,
+            label: milestone.label,
+            expectedAt: milestone.expectedAt ?? null,
+            actualAt: milestone.actualAt ?? null,
+            status: milestone.status,
+            comment: milestone.comment ?? null,
+          }))}
+        />
+      </Card>
+
+      {canEditShipments ? (
+        <Card title="Edit shipment operational data" subtitle="Operational form with current shipment values">
+          <ShipmentForm
+            action={updateShipmentAction}
+            customers={customers}
+            submitLabel="Update shipment"
+            defaults={{
+              id: shipment.id,
+              shipmentNumber: shipment.shipmentNumber,
+              customerId: shipment.customerId,
+              quoteId: shipment.quoteId ?? undefined,
+              quoteNumber: shipment.quoteNumber ?? undefined,
+              incotermCode: shipment.incotermCode ?? "",
+              serviceLevel: shipment.serviceLevel ?? "",
+              commodity: shipment.commodity ?? "",
+              mode: shipment.mode as "AIR" | "OCEAN" | "ROAD",
+              direction: shipment.direction as "IMPORT" | "EXPORT",
+              status: shipment.status as
+                | "DRAFT"
+                | "BOOKING_REQUESTED"
+                | "BOOKING_CONFIRMED"
+                | "IN_TRANSIT"
+                | "ARRIVED"
+                | "CUSTOMS"
+                | "DELIVERED"
+                | "CLOSED"
+                | "CANCELLED",
+              originCode: shipment.originCode ?? "",
+              destinationCode: shipment.destinationCode ?? "",
+              pol: shipment.pol ?? "",
+              pod: shipment.pod ?? "",
+              airportOrigin: shipment.airportOrigin ?? "",
+              airportDestination: shipment.airportDestination ?? "",
+              placeOfReceipt: shipment.placeOfReceipt ?? "",
+              placeOfDelivery: shipment.placeOfDelivery ?? "",
+              shipperName: shipment.shipperName ?? "",
+              consigneeName: shipment.consigneeName ?? "",
+              notifyPartyName: shipment.notifyPartyName ?? "",
+              agentOriginName: shipment.agentOriginName ?? "",
+              agentDestinationName: shipment.agentDestinationName ?? "",
+              carrierName: shipment.carrierName ?? "",
+              vesselOrFlight: shipment.vesselOrFlight ?? "",
+              bookingRef: shipment.bookingRef ?? "",
+              houseRef: shipment.houseRef ?? "",
+              masterRef: shipment.masterRef ?? "",
+              referenceClient: shipment.referenceClient ?? "",
+              referenceInternal: shipment.referenceInternal ?? "",
+              packageCount: shipment.packageCount ?? undefined,
+              packageType: shipment.packageType ?? "",
+              grossWeightKg: shipment.grossWeightKg ?? "",
+              chargeableWeightKg: shipment.chargeableWeightKg ?? "",
+              volumeM3: shipment.volumeM3 ?? "",
+              containerCount: shipment.containerCount ?? undefined,
+              containerType: shipment.containerType ?? "",
+              cargoReadyDate: shipment.cargoReadyDate
+                ? new Date(shipment.cargoReadyDate).toISOString().slice(0, 16)
+                : "",
+              etd: shipment.etd ? new Date(shipment.etd).toISOString().slice(0, 16) : "",
+              eta: shipment.eta ? new Date(shipment.eta).toISOString().slice(0, 16) : "",
+              atd: shipment.atd ? new Date(shipment.atd).toISOString().slice(0, 16) : "",
+              ata: shipment.ata ? new Date(shipment.ata).toISOString().slice(0, 16) : "",
+              deliveredAt: shipment.deliveredAt
+                ? new Date(shipment.deliveredAt).toISOString().slice(0, 16)
+                : "",
+              notes: shipment.notes ?? "",
+            }}
+          />
+        </Card>
+      ) : null}
+    </div>
+  );
+}

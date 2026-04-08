@@ -3,21 +3,23 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  Building2,
+  BarChart3,
+  BriefcaseBusiness,
   LayoutDashboard,
   Package,
-  ShieldCheck,
+  ReceiptText,
   ShipWheel,
-  UsersRound,
+  Users2,
 } from "lucide-react";
 
 const iconMap = {
   dashboard: LayoutDashboard,
-  customers: Building2,
-  quotes: Package,
   shipments: ShipWheel,
-  adminUsers: UsersRound,
-  adminPermissions: ShieldCheck,
+  quotes: Package,
+  customers: Users2,
+  finance: ReceiptText,
+  reports: BarChart3,
+  admin: BriefcaseBusiness,
 } as const;
 
 type SidebarNavItem = {
@@ -34,25 +36,27 @@ type SidebarProps = {
 
 const defaultNavItems: SidebarNavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: "dashboard" },
-  { href: "/customers", label: "Customers", icon: "customers" },
-  { href: "/quotes", label: "Quotes", icon: "quotes" },
   { href: "/shipments", label: "Shipments", icon: "shipments" },
-  { href: "/admin/users", label: "Admin · Users", icon: "adminUsers" },
-  { href: "/admin/permissions", label: "Admin · Permissions", icon: "adminPermissions" },
+  { href: "/quotes", label: "Quotes", icon: "quotes" },
+  { href: "/customers", label: "Customers", icon: "customers" },
+  { href: "/shipments?status=IN_TRANSIT", label: "Finance", icon: "finance" },
+  { href: "/quotes?status=APPROVED", label: "Reports", icon: "reports" },
+  { href: "/admin/users", label: "Admin", icon: "admin" },
 ];
 
 export function Sidebar({ items = defaultNavItems }: SidebarProps) {
   const pathname = usePathname();
 
   return (
-    <aside className="hidden w-64 border-r border-zinc-200 bg-white lg:block">
-      <div className="border-b border-zinc-200 px-6 py-5">
-        <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+    <aside className="fixed inset-y-0 z-30 hidden w-72 border-r border-slate-800 bg-slate-950 lg:block">
+      <div className="border-b border-slate-800 px-6 py-6">
+        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
           AtlasCargo
         </p>
-        <h1 className="text-lg font-semibold text-zinc-900">Freight Platform</h1>
+        <h1 className="mt-2 text-lg font-semibold text-slate-100">Operations Control Center</h1>
+        <p className="mt-1 text-xs text-slate-400">Freight forwarding live workspace</p>
       </div>
-      <nav className="space-y-1 p-3">
+      <nav className="space-y-1 p-4">
         {items.map((item) => {
           const isActive =
             pathname === item.href || pathname.startsWith(`${item.href}/`);
@@ -62,18 +66,26 @@ export function Sidebar({ items = defaultNavItems }: SidebarProps) {
             <Link
               key={item.href}
               href={item.href}
-              className={`flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition ${
+              className={`group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition ${
                 isActive
-                  ? "bg-zinc-900 text-white"
-                  : "text-zinc-700 hover:bg-zinc-100"
+                  ? "bg-blue-600/20 text-blue-200 shadow-[inset_0_0_0_1px_rgba(96,165,250,0.45)]"
+                  : "text-slate-300 hover:bg-slate-900 hover:text-slate-100"
               }`}
             >
-              <Icon className="h-4 w-4" />
+              <Icon
+                className={`h-4 w-4 transition ${
+                  isActive ? "text-blue-300" : "text-slate-400 group-hover:text-slate-200"
+                }`}
+              />
               {item.label}
             </Link>
           );
         })}
       </nav>
+      <div className="absolute inset-x-4 bottom-4 rounded-xl border border-slate-800 bg-slate-900/70 px-4 py-3">
+        <p className="text-xs font-medium text-slate-300">Realtime board</p>
+        <p className="mt-1 text-xs text-slate-500">Track movements, finance, and incidents.</p>
+      </div>
     </aside>
   );
 }

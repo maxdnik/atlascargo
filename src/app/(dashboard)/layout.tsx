@@ -34,24 +34,32 @@ export default async function DashboardLayout({
   if (visibleModules.has(PermissionResource.CUSTOMERS)) {
     navItems.push({ href: "/customers", label: "Customers", icon: "customers" });
   }
-  if (visibleModules.has(PermissionResource.QUOTES)) {
-    navItems.push({ href: "/quotes", label: "Quotes", icon: "quotes" });
-  }
   if (visibleModules.has(PermissionResource.SHIPMENTS)) {
     navItems.push({ href: "/shipments", label: "Shipments", icon: "shipments" });
   }
+  if (visibleModules.has(PermissionResource.QUOTES)) {
+    navItems.push({ href: "/quotes", label: "Quotes", icon: "quotes" });
+  }
+  if (
+    visibleModules.has(PermissionResource.REVENUE) ||
+    visibleModules.has(PermissionResource.EXPENSES)
+  ) {
+    navItems.push({ href: "/shipments", label: "Finance", icon: "finance" });
+  }
+  if (visibleModules.has(PermissionResource.REPORTS)) {
+    navItems.push({ href: "/dashboard", label: "Reports", icon: "reports" });
+  }
   if (visibleModules.has(PermissionResource.ADMIN)) {
-    navItems.push({ href: "/admin/users", label: "Admin · Users", icon: "adminUsers" });
-    navItems.push({ href: "/admin/permissions", label: "Admin · Permissions", icon: "adminPermissions" });
+    navItems.push({ href: "/admin/users", label: "Admin", icon: "admin" });
   }
 
   return (
-    <div className="min-h-screen bg-zinc-50">
+    <div className="min-h-screen bg-slate-100">
       <div className="flex min-h-screen">
         <Sidebar items={navItems} />
         <div className="flex min-h-screen min-w-0 flex-1 flex-col">
           <Topbar />
-          <main className="flex-1 p-6">{children}</main>
+          <main className="flex-1 p-6 lg:p-8">{children}</main>
         </div>
       </div>
     </div>

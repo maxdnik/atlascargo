@@ -107,6 +107,7 @@ export async function getShipmentById(companyId: string, id: string) {
           marginPct: true,
           customer: {
             select: {
+              id: true,
               legalName: true,
             },
           },
