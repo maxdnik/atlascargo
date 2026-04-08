@@ -106,6 +106,52 @@ export default async function DashboardLayout({
       match: "prefix",
     });
   }
+  if (visibleModules.has(PermissionResource.REVENUE)) {
+    navItems.push({
+      id: "finance-ar",
+      href: "/finance/ar",
+      label: "Accounts Receivable",
+      icon: "finance",
+      section: "finance",
+      match: "prefix",
+    });
+  }
+  if (visibleModules.has(PermissionResource.EXPENSES)) {
+    navItems.push({
+      id: "finance-ap",
+      href: "/finance/ap",
+      label: "Accounts Payable",
+      icon: "finance",
+      section: "finance",
+      match: "prefix",
+    });
+  }
+  if (
+    visibleModules.has(PermissionResource.REVENUE) &&
+    visibleModules.has(PermissionResource.EXPENSES)
+  ) {
+    navItems.push({
+      id: "finance-profitability",
+      href: "/finance/profitability",
+      label: "Shipment Profitability",
+      icon: "finance",
+      section: "finance",
+      match: "prefix",
+    });
+  }
+  if (
+    visibleModules.has(PermissionResource.REVENUE) ||
+    visibleModules.has(PermissionResource.EXPENSES)
+  ) {
+    navItems.push({
+      id: "finance-forecast",
+      href: "/finance/forecast",
+      label: "Cash Forecast",
+      icon: "finance",
+      section: "finance",
+      match: "prefix",
+    });
+  }
   if (visibleModules.has(PermissionResource.ADMIN)) {
     navItems.push({
       id: "admin",
