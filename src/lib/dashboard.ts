@@ -224,8 +224,11 @@ export async function getDashboardKpis(companyId = DEFAULT_COMPANY_ID) {
     eta: shipment.eta,
   }));
 
-  const trackingSource = shipments.find((shipment) =>
-    [ShipmentStatus.IN_TRANSIT, ShipmentStatus.CUSTOMS, ShipmentStatus.ARRIVED].includes(shipment.status),
+  const trackingSource = shipments.find(
+    (shipment) =>
+      shipment.status === ShipmentStatus.IN_TRANSIT ||
+      shipment.status === ShipmentStatus.CUSTOMS ||
+      shipment.status === ShipmentStatus.ARRIVED,
   );
   const trackingPanel = trackingSource
     ? {
@@ -248,9 +251,10 @@ export async function getDashboardKpis(companyId = DEFAULT_COMPANY_ID) {
             state:
               trackingSource.status === ShipmentStatus.IN_TRANSIT
                 ? "current"
-                : [ShipmentStatus.ARRIVED, ShipmentStatus.CUSTOMS, ShipmentStatus.DELIVERED, ShipmentStatus.CLOSED].includes(
-                    trackingSource.status,
-                  )
+                : trackingSource.status === ShipmentStatus.ARRIVED ||
+                    trackingSource.status === ShipmentStatus.CUSTOMS ||
+                    trackingSource.status === ShipmentStatus.DELIVERED ||
+                    trackingSource.status === ShipmentStatus.CLOSED
                   ? "done"
                   : "pending",
             description: "Main carriage movement",
@@ -260,7 +264,8 @@ export async function getDashboardKpis(companyId = DEFAULT_COMPANY_ID) {
             state:
               trackingSource.status === ShipmentStatus.CUSTOMS
                 ? "current"
-                : [ShipmentStatus.DELIVERED, ShipmentStatus.CLOSED].includes(trackingSource.status)
+                : trackingSource.status === ShipmentStatus.DELIVERED ||
+                    trackingSource.status === ShipmentStatus.CLOSED
                   ? "done"
                   : "pending",
             description: "Clearance and inspections",

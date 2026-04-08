@@ -242,7 +242,7 @@ export default async function DashboardPage() {
                                 : "bg-slate-300"
                           }`}
                         />
-                        {index < dashboardData.trackingPanel.steps.length - 1 ? (
+                        {index < dashboardData.trackingPanel!.steps.length - 1 ? (
                           <span className="mt-1 h-8 w-px bg-slate-200" />
                         ) : null}
                       </div>
