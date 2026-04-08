@@ -49,7 +49,7 @@ export function Sidebar({ items = defaultNavItems }: SidebarProps) {
   const pathname = usePathname();
 
   return (
-    <aside className="fixed inset-y-0 z-30 hidden w-72 border-r border-slate-800 bg-slate-950 lg:block">
+    <aside className="z-30 hidden h-screen w-72 shrink-0 border-r border-slate-800 bg-slate-950 lg:sticky lg:top-0 lg:block">
       <div className="border-b border-slate-800 px-6 py-6">
         <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
           AtlasCargo
