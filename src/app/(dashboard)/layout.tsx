@@ -31,6 +31,9 @@ export default async function DashboardLayout({
   if (visibleModules.has(PermissionResource.DASHBOARD)) {
     navItems.push({ href: "/dashboard", label: "Dashboard", icon: "dashboard" });
   }
+  if (visibleModules.has(PermissionResource.REPORTS)) {
+    navItems.push({ href: "/dashboard?view=reports", label: "Reports", icon: "reports" });
+  }
   if (visibleModules.has(PermissionResource.CUSTOMERS)) {
     navItems.push({ href: "/customers", label: "Customers", icon: "customers" });
   }
@@ -44,10 +47,7 @@ export default async function DashboardLayout({
     visibleModules.has(PermissionResource.REVENUE) ||
     visibleModules.has(PermissionResource.EXPENSES)
   ) {
-    navItems.push({ href: "/shipments", label: "Finance", icon: "finance" });
-  }
-  if (visibleModules.has(PermissionResource.REPORTS)) {
-    navItems.push({ href: "/dashboard", label: "Reports", icon: "reports" });
+    navItems.push({ href: "/shipments?view=finance", label: "Finance", icon: "finance" });
   }
   if (visibleModules.has(PermissionResource.ADMIN)) {
     navItems.push({ href: "/admin/users", label: "Admin", icon: "admin" });

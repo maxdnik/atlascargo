@@ -23,6 +23,7 @@ const iconMap = {
 } as const;
 
 type SidebarNavItem = {
+  id?: string;
   href: string;
   label: string;
   icon: keyof typeof iconMap;
@@ -58,13 +59,14 @@ export function Sidebar({ items = defaultNavItems }: SidebarProps) {
       </div>
       <nav className="space-y-1 p-4">
         {items.map((item) => {
+          const [itemPath] = item.href.split("?");
           const isActive =
-            pathname === item.href || pathname.startsWith(`${item.href}/`);
+            pathname === itemPath || pathname.startsWith(`${itemPath}/`);
           const Icon = iconMap[item.icon];
 
           return (
             <Link
-              key={item.href}
+              key={item.id ?? `${item.href}-${item.label}`}
               href={item.href}
               className={`group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition ${
                 isActive
