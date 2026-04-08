@@ -30,21 +30,21 @@ export function LoginForm() {
       setLoading(false);
 
       if (!result) {
-        setError("No hubo respuesta del servidor de autenticacion.");
+        setError("No hubo respuesta del servidor de autenticación.");
         return;
       }
 
       if (result.error) {
         if (result.error === "CredentialsSignin") {
-          setError("Email o contrasena incorrectos.");
+          setError("Email o contraseña incorrectos.");
         } else {
-          setError(`No se pudo iniciar sesion: ${result.error}`);
+          setError(`No se pudo iniciar sesión: ${result.error}`);
         }
         return;
       }
 
       if (!result.ok) {
-        setError(`No se pudo iniciar sesion (estado ${result.status}).`);
+        setError(`No se pudo iniciar sesión (estado ${result.status}).`);
         return;
       }
 
@@ -54,8 +54,8 @@ export function LoginForm() {
       setLoading(false);
       setError(
         submitError instanceof Error
-          ? `Error inesperado al iniciar sesion: ${submitError.message}`
-          : "Error inesperado al iniciar sesion.",
+          ? `Error inesperado al iniciar sesión: ${submitError.message}`
+          : "Error inesperado al iniciar sesión.",
       );
     }
   }
@@ -79,7 +79,7 @@ export function LoginForm() {
       </div>
       <div>
         <label className="mb-1 block text-sm font-medium text-slate-700" htmlFor="password">
-          Contrasena
+          Contraseña
         </label>
         <input
           id="password"
@@ -88,7 +88,7 @@ export function LoginForm() {
           required
           value={password}
           onChange={(event) => setPassword(event.target.value)}
-          placeholder="Ingresa tu contrasena"
+          placeholder="Ingresá tu contraseña"
           className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-300 focus:bg-white focus:ring-2 focus:ring-blue-100"
         />
       </div>
@@ -98,7 +98,7 @@ export function LoginForm() {
         disabled={loading}
         className="mt-2 w-full rounded-xl bg-[#0A2647] px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#0f325b] disabled:opacity-50"
       >
-        {loading ? "Ingresando..." : "Iniciar Sesion"}
+        {loading ? "Ingresando..." : "Iniciar Sesión"}
       </button>
       <p className="pt-1 text-center text-sm text-slate-500 transition hover:text-slate-700">
         ¿Olvidaste tu contraseña?
