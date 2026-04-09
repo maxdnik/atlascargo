@@ -3,6 +3,7 @@ import { chromium } from "playwright";
 import { MilestoneStatus, ShipmentStatus } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
+import { syncShipmentStatusFromMilestones } from "@/lib/shipment-status";
 
 const BASE_URL = process.env.BASE_URL ?? "http://localhost:3000";
 const SHIPMENT_ID = "shp_air_import_0001";
@@ -84,6 +85,39 @@ async function resetBaselineState() {
       },
     });
   }
+}
+
+async function seedDelayGatingScenario() {
+  await resetBaselineState();
+  const shipmentId = SHIPMENT_ID;
+
+  await prisma.shipmentMilestone.upsert({
+    where: {
+      shipmentId_code: {
+        shipmentId,
+        code: "CUSTOMS_IN_PROGRESS",
+      },
+    },
+    create: {
+      shipmentId,
+      code: "CUSTOMS_IN_PROGRESS",
+      label: "Customs In Progress",
+      expectedAt: new Date("2026-04-05T10:00:00.000Z"),
+      actualAt: null,
+      status: MilestoneStatus.DELAYED,
+      isCritical: false,
+    },
+    update: {
+      expectedAt: new Date("2026-04-05T10:00:00.000Z"),
+      actualAt: null,
+      status: MilestoneStatus.DELAYED,
+    },
+  });
+
+  await syncShipmentStatusFromMilestones({
+    companyId: "comp_atlascargo",
+    shipmentId,
+  });
 }
 
 function expectedHeaderLabel(status: ShipmentStatus) {
@@ -190,8 +224,30 @@ async function expectPersistedShipmentStatus(expected: ShipmentStatus) {
   console.log(`PASS db status ${expected}`);
 }
 
+async function expectMilestoneStatus(code: string, expected: MilestoneStatus) {
+  const milestone = await prisma.shipmentMilestone.findUnique({
+    where: {
+      shipmentId_code: {
+        shipmentId: SHIPMENT_ID,
+        code,
+      },
+    },
+    select: {
+      status: true,
+    },
+  });
+  assertCondition(Boolean(milestone), `Milestone ${code} not found`);
+  assertCondition(
+    milestone!.status === expected,
+    `Milestone ${code} expected ${expected}, got ${milestone!.status}`,
+  );
+  console.log(`PASS milestone ${code} status ${expected}`);
+}
+
 async function run() {
-  await resetBaselineState();
+  await seedDelayGatingScenario();
+  await expectPersistedShipmentStatus(ShipmentStatus.BOOKING_REQUESTED);
+  await expectMilestoneStatus("CUSTOMS_IN_PROGRESS", MilestoneStatus.PENDING);
 
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
@@ -217,6 +273,7 @@ async function run() {
   await page.goto(`${BASE_URL}/shipments/${SHIPMENT_ID}`, { waitUntil: "networkidle" });
   await updateMilestone(page, "ARRIVED", "2026-04-08T12:00");
   await expectPersistedShipmentStatus(ShipmentStatus.ARRIVED);
+  await expectMilestoneStatus("CUSTOMS_IN_PROGRESS", MilestoneStatus.DELAYED);
   await expectDetailStatus(page, ShipmentStatus.ARRIVED);
   await expectShipmentsListStatus(page, "Arrived");
   await expectDashboardStatus(page, ShipmentStatus.ARRIVED);

@@ -844,6 +844,7 @@ export async function updateShipmentAction(
         nextStatus: persisted.status,
         statusChanged: syncResult.statusChanged,
         datesChanged: syncResult.datesChanged,
+        milestoneStatusesChanged: syncResult.milestoneStatusesChanged,
       };
     });
 
@@ -861,6 +862,7 @@ export async function updateShipmentAction(
           previousStatus: updated.previousStatus,
           statusChanged: updated.statusChanged,
           datesChanged: updated.datesChanged,
+          milestoneStatusesChanged: updated.milestoneStatusesChanged,
         },
       },
     });
@@ -2033,7 +2035,7 @@ export async function upsertMilestoneAction(
       shipmentId: shipment.id,
     });
 
-    if (syncResult.statusChanged || syncResult.datesChanged) {
+    if (syncResult.statusChanged || syncResult.datesChanged || syncResult.milestoneStatusesChanged) {
       await prisma.activityLog.create({
         data: {
           companyId: ctx.companyId,
@@ -2048,6 +2050,7 @@ export async function upsertMilestoneAction(
             nextStatus: syncResult.nextStatus,
             statusChanged: syncResult.statusChanged,
             datesChanged: syncResult.datesChanged,
+            milestoneStatusesChanged: syncResult.milestoneStatusesChanged,
             source: "MILESTONE_UPDATE",
             milestoneCode: parsed.code,
           },
