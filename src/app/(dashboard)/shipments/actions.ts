@@ -27,6 +27,10 @@ import {
   markInvoicePaid,
   updateInvoiceHeader,
 } from "@/lib/invoices";
+import {
+  runAlertChecksForInvoiceMutation,
+  runAlertChecksForShipmentUpdate,
+} from "@/lib/alerts";
 
 const TRANSPORT_MODES = ["AIR", "OCEAN", "ROAD", "COURIER"] as const;
 const TRADE_DIRECTIONS = ["IMPORT", "EXPORT"] as const;
@@ -602,6 +606,11 @@ export async function createShipmentAction(
       },
     });
 
+    await runAlertChecksForShipmentUpdate({
+      companyId: ctx.companyId,
+      shipmentId: created.id,
+    });
+
     revalidatePath("/shipments");
     revalidatePath("/dashboard");
 
@@ -817,6 +826,11 @@ export async function updateShipmentAction(
         beforeJson: before,
         afterJson: updated,
       },
+    });
+
+    await runAlertChecksForShipmentUpdate({
+      companyId: ctx.companyId,
+      shipmentId: updated.id,
     });
 
     revalidatePath("/shipments");
@@ -1477,6 +1491,11 @@ export async function createInvoiceAction(
       },
     });
 
+    await runAlertChecksForInvoiceMutation({
+      companyId: ctx.companyId,
+      shipmentId: parsed.shipmentId,
+    });
+
     revalidatePath(`/shipments/${parsed.shipmentId}`);
     revalidatePath(`/finance/invoices/${created.id}`);
     revalidatePath("/finance/invoices");
@@ -1535,6 +1554,11 @@ export async function upsertInvoiceAction(
         notes: parsed.notes,
       });
     }
+
+    await runAlertChecksForInvoiceMutation({
+      companyId: ctx.companyId,
+      shipmentId: parsed.shipmentId,
+    });
 
     revalidatePath(`/shipments/${parsed.shipmentId}`);
     revalidatePath(`/finance/invoices/${parsed.id}`);
@@ -1606,6 +1630,11 @@ export async function markInvoicePaidAction(
       invoiceId: id,
     });
 
+    await runAlertChecksForInvoiceMutation({
+      companyId: ctx.companyId,
+      shipmentId: updated.shipmentId,
+    });
+
     revalidatePath(`/shipments/${updated.shipmentId}`);
     revalidatePath(`/finance/invoices/${updated.id}`);
     revalidatePath("/finance/invoices");
@@ -1641,6 +1670,11 @@ export async function cancelInvoiceAction(
       invoiceId: id,
     });
 
+    await runAlertChecksForInvoiceMutation({
+      companyId: ctx.companyId,
+      shipmentId: updated.shipmentId,
+    });
+
     revalidatePath(`/shipments/${updated.shipmentId}`);
     revalidatePath(`/finance/invoices/${updated.id}`);
     revalidatePath("/finance/invoices");
@@ -1674,6 +1708,11 @@ export async function deleteInvoiceAction(
     const deleted = await deleteInvoice({
       companyId: ctx.companyId,
       invoiceId: id,
+    });
+
+    await runAlertChecksForInvoiceMutation({
+      companyId: ctx.companyId,
+      shipmentId: deleted.shipmentId,
     });
 
     revalidatePath(`/shipments/${deleted.shipmentId}`);

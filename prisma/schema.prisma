@@ -207,6 +207,24 @@ enum NotificationLevel {
   SUCCESS
 }
 
+enum AlertType {
+  MISSING_INVOICE
+  NEGATIVE_MARGIN
+  ETA_DELAY
+  MISSING_DOC
+}
+
+enum AlertSeverity {
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum AlertStatus {
+  OPEN
+  RESOLVED
+}
+
 enum ActivityAction {
   CREATE
   UPDATE
@@ -259,6 +277,7 @@ model Company {
   tasks         Task[]
   notes         Note[]
   activities    ActivityLog[]
+  alerts        Alert[]
 }
 
 model Branch {
@@ -699,6 +718,7 @@ model Shipment {
   invoices           Invoice[]
   tasks              Task[]
   notesLog           Note[]
+  alerts             Alert[]
 
   @@unique([companyId, shipmentNumber])
   @@index([shipmentNumber])
@@ -1083,4 +1103,23 @@ model Notification {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, readAt, createdAt])
+}
+
+model Alert {
+  id         String        @id @default(cuid())
+  companyId  String
+  type       AlertType
+  severity   AlertSeverity
+  shipmentId String?
+  message    String
+  status     AlertStatus   @default(OPEN)
+  createdAt  DateTime      @default(now())
+  resolvedAt DateTime?
+
+  company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  shipment Shipment? @relation(fields: [shipmentId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, status, createdAt])
+  @@index([companyId, type, status])
+  @@index([shipmentId, status])
 }
