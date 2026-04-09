@@ -41,6 +41,7 @@ import {
   parseShipmentDocumentWithMock,
   type ParsedShipmentFieldKey,
 } from "@/lib/document-parsing";
+import { syncShipmentStatusFromMilestones } from "@/lib/shipment-status";
 
 const TRANSPORT_MODES = ["AIR", "OCEAN", "ROAD", "COURIER"] as const;
 const TRADE_DIRECTIONS = ["IMPORT", "EXPORT"] as const;
@@ -823,29 +824,56 @@ export async function updateShipmentAction(
         });
       }
 
-      return shipment;
+      const syncResult = await syncShipmentStatusFromMilestones({
+        companyId: ctx.companyId,
+        shipmentId: shipment.id,
+        tx,
+      });
+
+      const persisted = await tx.shipment.findUnique({
+        where: { id: shipment.id },
+        select: { id: true, status: true },
+      });
+      if (!persisted) {
+        throw new Error("Shipment not found after status synchronization");
+      }
+
+      return {
+        shipmentId: persisted.id,
+        previousStatus: before.status,
+        nextStatus: persisted.status,
+        statusChanged: syncResult.statusChanged,
+        datesChanged: syncResult.datesChanged,
+      };
     });
 
     await prisma.activityLog.create({
       data: {
         companyId: ctx.companyId,
         entityType: "SHIPMENT",
-        entityId: updated.id,
+        entityId: updated.shipmentId,
         action: "UPDATE",
         actorId: ctx.userId,
         beforeJson: before,
-        afterJson: updated,
+        afterJson: {
+          shipmentId: updated.shipmentId,
+          status: updated.nextStatus,
+          previousStatus: updated.previousStatus,
+          statusChanged: updated.statusChanged,
+          datesChanged: updated.datesChanged,
+        },
       },
     });
 
     await runAlertChecksForShipmentUpdate({
       companyId: ctx.companyId,
-      shipmentId: updated.id,
+      shipmentId: updated.shipmentId,
     });
 
     revalidatePath("/shipments");
-    revalidatePath(`/shipments/${updated.id}`);
+    revalidatePath(`/shipments/${updated.shipmentId}`);
     revalidatePath("/dashboard");
+    revalidatePath("/dashboard/action-center");
 
     return { success: true };
   } catch (error) {
@@ -2000,8 +2028,42 @@ export async function upsertMilestoneAction(
       },
     });
 
+    const syncResult = await syncShipmentStatusFromMilestones({
+      companyId: ctx.companyId,
+      shipmentId: shipment.id,
+    });
+
+    if (syncResult.statusChanged || syncResult.datesChanged) {
+      await prisma.activityLog.create({
+        data: {
+          companyId: ctx.companyId,
+          entityType: "SHIPMENT",
+          entityId: shipment.id,
+          action: "UPDATE",
+          actorId: ctx.userId,
+          beforeJson: {
+            previousStatus: syncResult.previousStatus,
+          },
+          afterJson: {
+            nextStatus: syncResult.nextStatus,
+            statusChanged: syncResult.statusChanged,
+            datesChanged: syncResult.datesChanged,
+            source: "MILESTONE_UPDATE",
+            milestoneCode: parsed.code,
+          },
+        },
+      });
+    }
+
+    await runAlertChecksForShipmentUpdate({
+      companyId: ctx.companyId,
+      shipmentId: shipment.id,
+    });
+
     revalidatePath(`/shipments/${shipment.id}`);
     revalidatePath("/shipments");
+    revalidatePath("/dashboard");
+    revalidatePath("/dashboard/action-center");
     return { success: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
