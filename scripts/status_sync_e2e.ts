@@ -3,7 +3,13 @@ import { chromium } from "playwright";
 import { MilestoneStatus, ShipmentStatus } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
-import { syncShipmentStatusFromMilestones } from "@/lib/shipment-status";
+import {
+  syncShipmentStatusFromMilestones,
+} from "@/lib/shipment-status";
+import {
+  MilestoneSequenceError,
+  validateMilestoneCompletionSequence,
+} from "@/lib/milestone-sequence";
 
 const BASE_URL = process.env.BASE_URL ?? "http://localhost:3000";
 const SHIPMENT_ID = "shp_air_import_0001";
@@ -37,6 +43,12 @@ async function resetBaselineState() {
     {
       code: "BOOKING_CONFIRMED",
       label: "Booking Confirmed",
+      actualAt: null,
+      status: MilestoneStatus.PENDING,
+    },
+    {
+      code: "CARGO_READY",
+      label: "Cargo Ready",
       actualAt: null,
       status: MilestoneStatus.PENDING,
     },
@@ -75,6 +87,7 @@ async function resetBaselineState() {
         expectedAt: row.actualAt,
         actualAt: row.actualAt,
         status: row.status,
+        comment: null,
         isCritical: true,
       },
       update: {
@@ -82,6 +95,7 @@ async function resetBaselineState() {
         expectedAt: row.actualAt,
         actualAt: row.actualAt,
         status: row.status,
+        comment: null,
       },
     });
   }
@@ -105,12 +119,14 @@ async function seedDelayGatingScenario() {
       expectedAt: new Date("2026-04-05T10:00:00.000Z"),
       actualAt: null,
       status: MilestoneStatus.DELAYED,
+      comment: null,
       isCritical: false,
     },
     update: {
       expectedAt: new Date("2026-04-05T10:00:00.000Z"),
       actualAt: null,
       status: MilestoneStatus.DELAYED,
+      comment: null,
     },
   });
 
@@ -155,21 +171,100 @@ async function expectDetailStatus(page: import("playwright").Page, expected: Shi
   console.log(`PASS detail status ${expected}`);
 }
 
-async function updateMilestone(
+async function submitMilestoneUpdate(
   page: import("playwright").Page,
-  code: "DEPARTED" | "ARRIVED" | "DELIVERED",
+  input: {
+    code:
+      | "BOOKING_REQUESTED"
+      | "BOOKING_CONFIRMED"
+      | "CARGO_READY"
+      | "DEPARTED"
+      | "ARRIVED"
+      | "CUSTOMS_IN_PROGRESS"
+      | "DELIVERED";
+    expectedAt?: string;
+    actualAt?: string;
+    status?: MilestoneStatus;
+    notes?: string;
+  },
+) {
+  const form = page.locator("form").filter({
+    has: page.locator(`input[name='code'][value='${input.code}']`),
+  });
+  await form.first().waitFor({ state: "visible", timeout: 10000 });
+  await page.waitForTimeout(250);
+  if (input.expectedAt !== undefined) {
+    await form.locator("input[name='expectedAt']").fill(input.expectedAt);
+  }
+  if (input.actualAt !== undefined) {
+    await form.locator("input[name='actualAt']").fill(input.actualAt);
+  }
+  if (input.status !== undefined) {
+    const statusSelect = form.locator("select[name='status']");
+    const completedOptionDisabled = await statusSelect
+      .locator("option[value='COMPLETED']")
+      .isDisabled();
+    const targetIsCompleted = input.status === MilestoneStatus.COMPLETED;
+    if (targetIsCompleted && completedOptionDisabled) {
+      await statusSelect.evaluate((node) => {
+        const select = node as HTMLSelectElement;
+        const option = select.querySelector("option[value='COMPLETED']") as HTMLOptionElement | null;
+        if (option) option.disabled = false;
+      });
+    }
+    await statusSelect.selectOption(input.status);
+  }
+  if (input.notes !== undefined) {
+    await form.locator("textarea[name='notes']").fill(input.notes);
+  }
+  await page.waitForTimeout(250);
+  await form.getByRole("button", { name: "Update milestone" }).click();
+  await page.waitForLoadState("networkidle");
+  await page.waitForTimeout(1500);
+}
+
+async function completeMilestone(
+  page: import("playwright").Page,
+  code:
+    | "BOOKING_REQUESTED"
+    | "BOOKING_CONFIRMED"
+    | "CARGO_READY"
+    | "DEPARTED"
+    | "ARRIVED"
+    | "CUSTOMS_IN_PROGRESS"
+    | "DELIVERED",
   actualAtValue: string,
+) {
+  await submitMilestoneUpdate(page, {
+    code,
+    actualAt: actualAtValue,
+    status: MilestoneStatus.COMPLETED,
+  });
+  console.log(`PASS completed milestone ${code} -> ${actualAtValue}`);
+}
+
+async function expectMilestoneFormError(
+  page: import("playwright").Page,
+  code:
+    | "BOOKING_CONFIRMED"
+    | "CARGO_READY"
+    | "DEPARTED"
+    | "ARRIVED"
+    | "CUSTOMS_IN_PROGRESS"
+    | "DELIVERED",
+  contains: string,
 ) {
   const form = page.locator("form").filter({
     has: page.locator(`input[name='code'][value='${code}']`),
   });
-  await form.first().waitFor({ state: "visible", timeout: 10000 });
-  await form.locator("input[name='actualAt']").fill(actualAtValue);
-  await form.locator("select[name='status']").selectOption("COMPLETED");
-  await form.getByRole("button", { name: "Update milestone" }).click();
-  await page.waitForLoadState("networkidle");
-  await page.waitForTimeout(1200);
-  console.log(`PASS updated milestone ${code} -> ${actualAtValue}`);
+  const errorNode = form.locator("p.text-red-600").first();
+  await errorNode.waitFor({ state: "visible", timeout: 10000 });
+  const text = (await errorNode.innerText()).toLowerCase();
+  assertCondition(
+    text.includes(contains.toLowerCase()),
+    `Expected milestone error containing "${contains}", got "${text}"`,
+  );
+  console.log(`PASS milestone update rejected with message containing "${contains}"`);
 }
 
 async function expectShipmentsListStatus(page: import("playwright").Page, expectedLabel: string) {
@@ -244,8 +339,56 @@ async function expectMilestoneStatus(code: string, expected: MilestoneStatus) {
   console.log(`PASS milestone ${code} status ${expected}`);
 }
 
+async function expectSequenceValidationFailure() {
+  const milestones = await prisma.shipmentMilestone.findMany({
+    where: { shipmentId: SHIPMENT_ID },
+    select: {
+      code: true,
+      status: true,
+      actualAt: true,
+    },
+  });
+
+  let receivedExpectedError = false;
+  try {
+    validateMilestoneCompletionSequence({
+      targetCode: "ARRIVED",
+      targetStatus: MilestoneStatus.COMPLETED,
+      targetActualAt: new Date("2026-04-08T12:00:00.000Z"),
+      milestones,
+      autoCompleteMissing: false,
+    });
+  } catch (error) {
+    if (error instanceof MilestoneSequenceError && error.code === "INVALID_MILESTONE_SEQUENCE") {
+      receivedExpectedError = true;
+      console.log("PASS sequence validation blocks ARRIVED before DEPARTED");
+    } else {
+      throw error;
+    }
+  }
+
+  assertCondition(receivedExpectedError, "Expected INVALID_MILESTONE_SEQUENCE error was not thrown");
+}
+
+async function expectMilestoneActualAtNull(code: string) {
+  const milestone = await prisma.shipmentMilestone.findUnique({
+    where: {
+      shipmentId_code: {
+        shipmentId: SHIPMENT_ID,
+        code,
+      },
+    },
+    select: {
+      actualAt: true,
+    },
+  });
+  assertCondition(Boolean(milestone), `Milestone ${code} not found`);
+  assertCondition(milestone!.actualAt === null, `Milestone ${code} actualAt expected null`);
+}
+
 async function run() {
   await seedDelayGatingScenario();
+  await expectSequenceValidationFailure();
   await expectPersistedShipmentStatus(ShipmentStatus.BOOKING_REQUESTED);
   await expectMilestoneStatus("CUSTOMS_IN_PROGRESS", MilestoneStatus.PENDING);
 
@@ -265,13 +408,61 @@ async function run() {
 
   await expectDetailStatus(page, ShipmentStatus.BOOKING_REQUESTED);
 
-  await updateMilestone(page, "DEPARTED", "2026-04-06T09:00");
+  // Expected date and notes edits should remain allowed even before stage is actionable.
+  await page.waitForTimeout(500);
+  await submitMilestoneUpdate(page, {
+    code: "CUSTOMS_IN_PROGRESS",
+    expectedAt: "2026-04-05T10:00",
+    actualAt: "",
+    status: MilestoneStatus.PENDING,
+    notes: "Expected-date edit allowed pre-arrival",
+  });
+  await expectMilestoneStatus("CUSTOMS_IN_PROGRESS", MilestoneStatus.PENDING);
+  console.log("PASS expected date/notes editable without sequence completion");
+  await page.screenshot({
+    path: "/opt/cursor/artifacts/milestone_sequence_expected_date_notes_edit.png",
+    fullPage: false,
+  });
+
+  // Invalid progression must fail (backend-enforced), even if user sets actual date directly.
+  await page.waitForTimeout(500);
+  await submitMilestoneUpdate(page, {
+    code: "ARRIVED",
+    actualAt: "2026-04-08T12:00",
+    status: MilestoneStatus.COMPLETED,
+  });
+  await expectMilestoneFormError(page, "ARRIVED", "Cannot complete ARRIVED");
+  await page.waitForTimeout(800);
+  await expectMilestoneActualAtNull("ARRIVED");
+  await expectPersistedShipmentStatus(ShipmentStatus.BOOKING_REQUESTED);
+
+  await page.waitForTimeout(500);
+  await submitMilestoneUpdate(page, {
+    code: "DELIVERED",
+    actualAt: "2026-04-09T14:30",
+    status: MilestoneStatus.COMPLETED,
+  });
+  await expectMilestoneFormError(page, "DELIVERED", "Cannot complete DELIVERED");
+  await page.waitForTimeout(800);
+  await expectMilestoneActualAtNull("DELIVERED");
+  await expectPersistedShipmentStatus(ShipmentStatus.BOOKING_REQUESTED);
+
+  // Correct in-order progression.
+  await completeMilestone(page, "BOOKING_CONFIRMED", "2026-04-05T07:30");
+  await expectPersistedShipmentStatus(ShipmentStatus.BOOKING_CONFIRMED);
+  await expectDetailStatus(page, ShipmentStatus.BOOKING_CONFIRMED);
+
+  await completeMilestone(page, "CARGO_READY", "2026-04-05T08:15");
+  await expectPersistedShipmentStatus(ShipmentStatus.BOOKING_CONFIRMED);
+  await expectDetailStatus(page, ShipmentStatus.BOOKING_CONFIRMED);
+
+  await completeMilestone(page, "DEPARTED", "2026-04-06T09:00");
   await expectPersistedShipmentStatus(ShipmentStatus.IN_TRANSIT);
   await expectDetailStatus(page, ShipmentStatus.IN_TRANSIT);
   await expectShipmentsListStatus(page, "In Transit");
 
   await page.goto(`${BASE_URL}/shipments/${SHIPMENT_ID}`, { waitUntil: "networkidle" });
-  await updateMilestone(page, "ARRIVED", "2026-04-08T12:00");
+  await completeMilestone(page, "ARRIVED", "2026-04-08T12:00");
   await expectPersistedShipmentStatus(ShipmentStatus.ARRIVED);
   await expectMilestoneStatus("CUSTOMS_IN_PROGRESS", MilestoneStatus.DELAYED);
   await expectDetailStatus(page, ShipmentStatus.ARRIVED);
@@ -285,7 +476,11 @@ async function run() {
   });
 
   await page.goto(`${BASE_URL}/shipments/${SHIPMENT_ID}`, { waitUntil: "networkidle" });
-  await updateMilestone(page, "DELIVERED", "2026-04-09T14:30");
+  await completeMilestone(page, "CUSTOMS_IN_PROGRESS", "2026-04-08T14:15");
+  await expectPersistedShipmentStatus(ShipmentStatus.CUSTOMS);
+  await expectDetailStatus(page, ShipmentStatus.CUSTOMS);
+
+  await completeMilestone(page, "DELIVERED", "2026-04-09T14:30");
   await expectPersistedShipmentStatus(ShipmentStatus.DELIVERED);
   await expectDetailStatus(page, ShipmentStatus.DELIVERED);
   await expectShipmentsListStatus(page, "Delivered");

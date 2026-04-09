@@ -41,7 +41,14 @@ import {
   parseShipmentDocumentWithMock,
   type ParsedShipmentFieldKey,
 } from "@/lib/document-parsing";
-import { syncShipmentStatusFromMilestones } from "@/lib/shipment-status";
+import {
+  AUTO_COMPLETE_MISSING_SEQUENCE_MILESTONES,
+  MilestoneSequenceError,
+  validateMilestoneCompletionSequence,
+} from "@/lib/milestone-sequence";
+import {
+  syncShipmentStatusFromMilestones,
+} from "@/lib/shipment-status";
 
 const TRANSPORT_MODES = ["AIR", "OCEAN", "ROAD", "COURIER"] as const;
 const TRADE_DIRECTIONS = ["IMPORT", "EXPORT"] as const;
@@ -106,6 +113,7 @@ const shipmentSchema = z.object({
 export type ShipmentActionState = {
   success: boolean;
   error?: string;
+  errorCode?: string;
 };
 
 const BASE_CURRENCY = "USD";
@@ -2004,30 +2012,65 @@ export async function upsertMilestoneAction(
     const normalizedNotes = normalizeOptional(parsed.notes);
     const status = parsed.status ?? (actualAt ? MilestoneStatus.COMPLETED : MilestoneStatus.PENDING);
 
-    await prisma.shipmentMilestone.upsert({
+    const currentMilestones = await prisma.shipmentMilestone.findMany({
       where: {
-        shipmentId_code: {
+        shipmentId: shipment.id,
+      },
+      select: {
+        code: true,
+        status: true,
+        actualAt: true,
+      },
+    });
+
+    const sequenceValidation = validateMilestoneCompletionSequence({
+      targetCode: parsed.code,
+      targetStatus: status,
+      targetActualAt: actualAt,
+      milestones: currentMilestones,
+      autoCompleteMissing: AUTO_COMPLETE_MISSING_SEQUENCE_MILESTONES,
+    });
+
+    await prisma.$transaction(async (tx) => {
+      if (sequenceValidation.autoCompleteCodes.length > 0) {
+        for (const code of sequenceValidation.autoCompleteCodes) {
+          await tx.shipmentMilestone.updateMany({
+            where: {
+              shipmentId: shipment.id,
+              code,
+            },
+            data: {
+              status: MilestoneStatus.COMPLETED,
+            },
+          });
+        }
+      }
+
+      await tx.shipmentMilestone.upsert({
+        where: {
+          shipmentId_code: {
+            shipmentId: shipment.id,
+            code: parsed.code,
+          },
+        },
+        create: {
           shipmentId: shipment.id,
           code: parsed.code,
+          label: parsed.label,
+          expectedAt,
+          actualAt,
+          status,
+          comment: normalizedNotes,
+          isCritical: defaultMilestones.some((m) => m.code === parsed.code && m.isCritical),
         },
-      },
-      create: {
-        shipmentId: shipment.id,
-        code: parsed.code,
-        label: parsed.label,
-        expectedAt,
-        actualAt,
-        status,
-        comment: normalizedNotes,
-        isCritical: defaultMilestones.some((m) => m.code === parsed.code && m.isCritical),
-      },
-      update: {
-        label: parsed.label,
-        expectedAt,
-        actualAt,
-        status,
-        comment: normalizedNotes,
-      },
+        update: {
+          label: parsed.label,
+          expectedAt,
+          actualAt,
+          status,
+          comment: normalizedNotes,
+        },
+      });
     });
 
     const syncResult = await syncShipmentStatusFromMilestones({
@@ -2069,6 +2112,13 @@ export async function upsertMilestoneAction(
     revalidatePath("/dashboard/action-center");
     return { success: true };
   } catch (error) {
+    if (error instanceof MilestoneSequenceError) {
+      return {
+        success: false,
+        errorCode: error.code,
+        error: error.message,
+      };
+    }
     const message = error instanceof Error ? error.message : "Unknown error";
     return { success: false, error: message };
   }

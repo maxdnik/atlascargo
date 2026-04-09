@@ -27,6 +27,7 @@ import type { Prisma } from "@prisma/client";
 
 import type { ShipmentActionState } from "@/app/(dashboard)/shipments/actions";
 import { MilestoneTimeline } from "@/components/shipments/milestone-timeline";
+import { canCompleteMilestoneInSequence } from "@/lib/milestone-sequence";
 import { ShipmentForm } from "@/components/shipments/shipment-form";
 
 type ShipmentDetailViewModel = {
@@ -247,6 +248,40 @@ type ParsingFieldKey =
   | "originCode"
   | "destinationCode"
   | "vesselOrFlight";
+
+function getMilestoneCompletionUiHints(
+  milestones: Array<{
+    code: string;
+    status: MilestoneStatus;
+    actualAt: Date | null;
+  }>,
+) {
+  return milestones.map((row) => {
+    const result = canCompleteMilestoneInSequence({
+      targetCode: row.code,
+      milestones,
+    });
+    if (row.actualAt || row.status === MilestoneStatus.COMPLETED) {
+      return {
+        code: row.code,
+        canComplete: true,
+        blockedReason: null,
+      };
+    }
+    if (!result.canComplete) {
+      return {
+        code: row.code,
+        canComplete: false,
+        blockedReason: result.blockedReason,
+      };
+    }
+    return {
+      code: row.code,
+      canComplete: true,
+      blockedReason: null,
+    };
+  });
+}
 
 function statusLabel(status: string) {
   return status
@@ -1633,18 +1668,50 @@ export function ShipmentDetailClient({
       </div>
 
       <Card title="Milestones update panel" subtitle="Update milestone dates and progress notes">
-        <MilestoneTimeline
-          shipmentId={shipment.id}
-          milestones={shipment.milestones.map((milestone) => ({
-            id: milestone.id,
-            code: milestone.code,
-            label: milestone.label,
-            expectedAt: milestone.expectedAt ?? null,
-            actualAt: milestone.actualAt ?? null,
-            status: milestone.status,
-            comment: milestone.comment ?? null,
-          }))}
-        />
+        {(() => {
+          const milestoneUiHints = getMilestoneCompletionUiHints(
+            shipment.milestones.map((milestone) => ({
+              id: milestone.id,
+              code: milestone.code,
+              status: milestone.status,
+              expectedAt: milestone.expectedAt ? new Date(milestone.expectedAt) : null,
+              actualAt: milestone.actualAt ? new Date(milestone.actualAt) : null,
+            })),
+          );
+          const blockedCount = milestoneUiHints.filter((hint) => !hint.canComplete).length;
+          const nextAllowed = milestoneUiHints.find((hint) => hint.canComplete);
+          return (
+            <>
+              {blockedCount > 0 ? (
+                <p className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  Sequential workflow enforced. {blockedCount} milestone
+                  {blockedCount === 1 ? "" : "s"} blocked.{" "}
+                  {nextAllowed
+                    ? `Next valid completion: ${nextAllowed.code}.`
+                    : "No further milestone can be completed yet."}
+                </p>
+              ) : null}
+              <MilestoneTimeline
+                shipmentId={shipment.id}
+                milestones={shipment.milestones.map((milestone) => ({
+                  id: milestone.id,
+                  code: milestone.code,
+                  label: milestone.label,
+                  expectedAt: milestone.expectedAt ?? null,
+                  actualAt: milestone.actualAt ?? null,
+                  status: milestone.status,
+                  comment: milestone.comment ?? null,
+                  blockedReason:
+                    milestoneUiHints.find((hint) => hint.code === milestone.code)?.blockedReason ??
+                    null,
+                  canComplete:
+                    milestoneUiHints.find((hint) => hint.code === milestone.code)?.canComplete ??
+                    true,
+                }))}
+              />
+            </>
+          );
+        })()}
       </Card>
 
       {canEditShipments ? (

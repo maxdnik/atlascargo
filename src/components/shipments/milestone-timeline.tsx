@@ -16,6 +16,8 @@ type MilestoneRow = {
   actualAt: string | null;
   status: MilestoneStatus;
   comment: string | null;
+  blockedReason?: string | null;
+  canComplete?: boolean;
 };
 
 type MilestoneTimelineProps = {
@@ -51,6 +53,7 @@ function MilestoneRowForm({
   milestone: MilestoneRow;
 }) {
   const [state, action, pending] = useActionState(upsertMilestoneAction, initialState);
+  const completionBlocked = milestone.canComplete === false && milestone.blockedReason;
 
   return (
     <form action={action} className="space-y-3 rounded-md border border-slate-200 bg-white p-3">
@@ -99,13 +102,23 @@ function MilestoneRowForm({
             name="status"
             defaultValue={milestone.status}
             className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+            title={completionBlocked ? milestone.blockedReason ?? "" : ""}
           >
             {Object.values(MilestoneStatus).map((status) => (
-              <option key={status} value={status}>
+              <option
+                key={status}
+                value={status}
+                disabled={status === MilestoneStatus.COMPLETED && milestone.canComplete === false}
+              >
                 {status}
               </option>
             ))}
           </select>
+          {completionBlocked ? (
+            <p className="mt-1 text-xs text-amber-700" title={milestone.blockedReason ?? ""}>
+              Next required stage: {milestone.blockedReason}
+            </p>
+          ) : null}
         </div>
       </div>
 

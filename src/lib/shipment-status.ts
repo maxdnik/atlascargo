@@ -44,6 +44,7 @@ type MilestoneStatusUpdate = {
   status: MilestoneStatus;
 };
 
+
 function isSameDate(a: Date | null, b: Date | null) {
   if (a === null && b === null) return true;
   if (a === null || b === null) return false;
