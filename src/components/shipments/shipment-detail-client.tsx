@@ -23,6 +23,7 @@ import {
   ShipmentCostStatus,
   ShipmentStatus,
 } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
 
 import type { ShipmentActionState } from "@/app/(dashboard)/shipments/actions";
 import { MilestoneTimeline } from "@/components/shipments/milestone-timeline";
@@ -118,7 +119,7 @@ type ShipmentDetailViewModel = {
       id: string;
       status: DocumentParsingStatus;
       createdAt: string;
-      parsedJson: Record<string, unknown> | null;
+      parsedJson: Prisma.JsonValue | null;
     }>;
   }>;
   revenues: Array<{
@@ -177,20 +178,6 @@ type ShipmentDetailViewModel = {
   }>;
 };
 
-type ParsingFieldKey =
-  | "shipperName"
-  | "consigneeName"
-  | "notifyPartyName"
-  | "grossWeightKg"
-  | "packageCount"
-  | "houseRef"
-  | "masterRef"
-  | "originCode"
-  | "destinationCode"
-  | "vesselOrFlight";
-
-type ParsedDocumentPayload = Partial<Record<ParsingFieldKey, string | number | null>>;
-
 type Props = {
   shipment: ShipmentDetailViewModel;
   customers: Array<{ id: string; code: string; legalName: string }>;
@@ -241,6 +228,26 @@ type Props = {
   };
 };
 
+type ParsingViewModel = {
+  id: string;
+  status: DocumentParsingStatus;
+  createdAt: string;
+  parsedJson: Record<string, string | number | null> | null;
+  conflictFields: Array<ParsingFieldKey>;
+};
+
+type ParsingFieldKey =
+  | "shipperName"
+  | "consigneeName"
+  | "notifyPartyName"
+  | "grossWeightKg"
+  | "packageCount"
+  | "houseRef"
+  | "masterRef"
+  | "originCode"
+  | "destinationCode"
+  | "vesselOrFlight";
+
 function statusLabel(status: string) {
   return status
     .toLowerCase()
@@ -273,6 +280,20 @@ function dateLabel(value?: string | Date | null, withTime = false) {
   if (!value) return "-";
   const parsed = new Date(value);
   return withTime ? parsed.toLocaleString() : parsed.toLocaleDateString();
+}
+
+function normalizeParsedJsonForPreview(
+  value: Prisma.JsonValue,
+): Record<string, string | number | null> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const source = value as Record<string, unknown>;
+  const normalized: Record<string, string | number | null> = {};
+  for (const [key, fieldValue] of Object.entries(source)) {
+    if (typeof fieldValue === "string" || typeof fieldValue === "number" || fieldValue === null) {
+      normalized[key] = fieldValue;
+    }
+  }
+  return normalized;
 }
 
 function modeIcon(mode: string) {
@@ -339,18 +360,6 @@ const documentTypeOptions = [
 ] as const;
 
 type ShipmentDocumentType = (typeof documentTypeOptions)[number];
-type ParsedShipmentFieldKey =
-  | "shipperName"
-  | "consigneeName"
-  | "notifyPartyName"
-  | "grossWeightKg"
-  | "packageCount"
-  | "houseRef"
-  | "masterRef"
-  | "originCode"
-  | "destinationCode"
-  | "vesselOrFlight";
-
 const documentTypeLabel: Record<ShipmentDocumentType, string> = {
   BL: "BL",
   AWB: "AWB",
@@ -366,19 +375,6 @@ function getDocumentTypeLabel(docType: string) {
     return documentTypeLabel[docType as ShipmentDocumentType];
   }
   return docType;
-}
-
-function parseJsonRecord(
-  value: Record<string, unknown> | null | undefined,
-): Record<string, string | number | null> {
-  if (!value) return {};
-  const record: Record<string, string | number | null> = {};
-  for (const [key, item] of Object.entries(value)) {
-    if (typeof item === "string" || typeof item === "number" || item === null) {
-      record[key] = item;
-    }
-  }
-  return record;
 }
 
 const documentGroupDefinitions: Array<{ key: string; label: string; types: ShipmentDocumentType[] }> = [
@@ -561,11 +557,15 @@ export function ShipmentDetailClient({
         (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
       )[0];
       if (!latest) continue;
-      const parsedJson = latest.parsedJson ?? null;
-      const conflictFields = Array.isArray((parsedJson as { conflicts?: unknown } | null)?.conflicts)
-        ? (((parsedJson as { conflicts?: Array<{ field?: unknown }> }).conflicts ?? [])
+      const rawJson =
+        latest.parsedJson && typeof latest.parsedJson === "object" && !Array.isArray(latest.parsedJson)
+          ? (latest.parsedJson as Record<string, unknown>)
+          : null;
+      const parsedJson = normalizeParsedJsonForPreview(latest.parsedJson);
+      const conflictFields = Array.isArray(rawJson?.conflicts)
+        ? (((rawJson.conflicts as Array<{ field?: unknown }>) ?? [])
             .map((entry) => String(entry.field ?? "").trim())
-            .filter(Boolean) as Array<keyof ParsedShipmentFields>)
+            .filter(Boolean) as Array<ParsingFieldKey>)
         : [];
       map.set(doc.id, {
         id: latest.id,

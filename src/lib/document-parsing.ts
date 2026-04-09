@@ -1,10 +1,4 @@
-import {
-  DocumentParsingStatus,
-  DocumentType,
-  type AlertSeverity,
-  type AlertType,
-  type Prisma,
-} from "@prisma/client";
+import { DocumentParsingStatus, DocumentType, Prisma, type Prisma as PrismaTypes } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
 import { runAlertChecksForShipmentUpdate } from "@/lib/alerts";
@@ -22,6 +16,8 @@ export type ParsedShipmentDocumentData = {
   vesselOrFlight: string | null;
 };
 
+export type ParsedShipmentFieldKey = keyof ParsedShipmentDocumentData;
+
 type ParseResult = {
   status: DocumentParsingStatus;
   parsed: ParsedShipmentDocumentData;
@@ -34,12 +30,6 @@ type FieldDiff = {
 };
 
 type FieldApplyStrategy = "ONLY_EMPTY" | "OVERRIDE_CONFLICTS";
-
-type AlertInput = {
-  type: AlertType;
-  severity: AlertSeverity;
-  message: string;
-};
 
 export type ApplyParsedDocumentInput = {
   companyId: string;
@@ -65,19 +55,6 @@ export type DocumentParsingFeedRow = {
   parsed: ParsedShipmentDocumentData | null;
 };
 
-type ParseShipmentDocumentResult = {
-  id: string;
-  shipmentDocumentId: string;
-  documentType: DocumentType;
-  status: DocumentParsingStatus;
-  parsedJson: Prisma.JsonValue | null;
-  createdAt: Date;
-  shipmentId: string;
-  shipmentNumber: string;
-  fileName: string;
-  alert?: AlertInput;
-};
-
 function normalizeText(value: string | null | undefined) {
   const trimmed = String(value ?? "").trim();
   return trimmed.length > 0 ? trimmed : null;
@@ -88,9 +65,45 @@ function normalizeNumber(value: number | null | undefined) {
   return Number.isFinite(value) ? value : null;
 }
 
-function toJsonCompatible(value: string | number | null): Prisma.InputJsonValue {
-  if (value === null) return "";
-  return value;
+function assignShipmentUpdateValue(
+  updates: PrismaTypes.ShipmentUpdateInput,
+  field: keyof ParsedShipmentDocumentData,
+  value: string | number | null,
+) {
+  switch (field) {
+    case "shipperName":
+      updates.shipperName = value === null ? null : String(value);
+      return;
+    case "consigneeName":
+      updates.consigneeName = value === null ? null : String(value);
+      return;
+    case "notifyPartyName":
+      updates.notifyPartyName = value === null ? null : String(value);
+      return;
+    case "houseRef":
+      updates.houseRef = value === null ? null : String(value);
+      return;
+    case "masterRef":
+      updates.masterRef = value === null ? null : String(value);
+      return;
+    case "originCode":
+      updates.originCode = value === null ? null : String(value);
+      return;
+    case "destinationCode":
+      updates.destinationCode = value === null ? null : String(value);
+      return;
+    case "vesselOrFlight":
+      updates.vesselOrFlight = value === null ? null : String(value);
+      return;
+    case "grossWeightKg":
+      updates.grossWeightKg = value === null ? null : Number(value);
+      return;
+    case "packageCount":
+      updates.packageCount = value === null ? null : Number(value);
+      return;
+    default:
+      return;
+  }
 }
 
 function getTypeInferenceFromDocument(docType: DocumentType) {
@@ -232,7 +245,7 @@ function getFieldDiffs(
     if (parsedValue === null) return;
     const currentValue = currentMap[field];
     if (currentValue === null || currentValue === "") {
-      updates[field] = toJsonCompatible(parsedValue);
+      assignShipmentUpdateValue(updates, field, parsedValue);
       updatedFieldNames.push(field);
       return;
     }
@@ -275,8 +288,8 @@ export async function parseShipmentDocumentWithMock(input: {
     throw new Error("Document not found");
   }
 
-  let status = DocumentParsingStatus.FAILED;
-  let parsedJson: Prisma.InputJsonValue | null = null;
+  let status: DocumentParsingStatus = DocumentParsingStatus.FAILED;
+  let parsedJson: PrismaTypes.InputJsonValue | null = null;
 
   try {
     const parsed = parseMockedDocument({
@@ -285,7 +298,7 @@ export async function parseShipmentDocumentWithMock(input: {
       referenceNumber: doc.referenceNumber,
     });
     status = parsed.status;
-    parsedJson = parsed.parsed as unknown as Prisma.InputJsonValue;
+    parsedJson = parsed.parsed as unknown as PrismaTypes.InputJsonValue;
   } catch {
     status = DocumentParsingStatus.FAILED;
     parsedJson = null;
@@ -295,7 +308,7 @@ export async function parseShipmentDocumentWithMock(input: {
     data: {
       shipmentDocumentId: doc.id,
       documentType: doc.docType,
-      parsedJson,
+      parsedJson: parsedJson ?? Prisma.JsonNull,
       status,
     },
   });
@@ -400,7 +413,7 @@ export async function applyParsedDocumentToShipment(input: ApplyParsedDocumentIn
   if (conflicts.length > 0 && strategy === "OVERRIDE_CONFLICTS") {
     for (const conflict of conflicts) {
       if (!overrideSet.has(conflict.field)) continue;
-      updates[conflict.field] = toJsonCompatible(conflict.parsed);
+      assignShipmentUpdateValue(updates, conflict.field, conflict.parsed);
       updatedFieldNames.push(conflict.field);
     }
   }

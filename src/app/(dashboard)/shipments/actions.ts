@@ -1083,7 +1083,6 @@ export async function triggerDocumentParsingAction(
       await createParsingFailureAlert({
         companyId: ctx.companyId,
         shipmentId: shipment.id,
-        shipmentDocumentId: document.id,
         fileName: document.fileName,
       });
     }
