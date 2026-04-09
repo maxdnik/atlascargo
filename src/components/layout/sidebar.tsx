@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { usePathname } from "next/navigation";
+import { useMemo, useState } from "react";
 import {
   AlertTriangle,
   BarChart3,
@@ -99,27 +99,20 @@ function isPathMatch(pathname: string, href: string, match: "exact" | "prefix" =
 
 export function Sidebar({ items = defaultNavItems }: SidebarProps) {
   const pathname = usePathname();
-  const router = useRouter();
   const normalizedPathname = normalizePath(pathname);
   const isFinanceRoute = normalizedPathname === "/finance" || normalizedPathname.startsWith("/finance/");
-  const [isFinanceExpanded, setIsFinanceExpanded] = useState(isFinanceRoute);
-
-  useEffect(() => {
-    if (isFinanceRoute) {
-      setIsFinanceExpanded(true);
-    }
-  }, [isFinanceRoute]);
+  const [isFinanceExpanded, setIsFinanceExpanded] = useState(false);
 
   const activeChildByParent = useMemo(() => {
     const active = new Map<string, string | null>();
     for (const item of items) {
       if (!item.children || item.children.length === 0) continue;
       const parentId = item.id ?? `${item.href}-${item.label}`;
-      const childMatch =
-        [...item.children]
-          .sort((a, b) => b.href.length - a.href.length)
-          .find((child) => isPathMatch(normalizedPathname, child.href, child.match ?? "prefix")) ?? null;
-      active.set(parentId, childMatch?.id ?? `${childMatch?.href}-${childMatch?.label}` ?? null);
+      const childMatch = [...item.children]
+        .sort((a, b) => b.href.length - a.href.length)
+        .find((child) => isPathMatch(normalizedPathname, child.href, child.match ?? "prefix"));
+      const childId = childMatch ? childMatch.id ?? `${childMatch.href}-${childMatch.label}` : null;
+      active.set(parentId, childId);
     }
     return active;
   }, [items, normalizedPathname]);
@@ -149,14 +142,7 @@ export function Sidebar({ items = defaultNavItems }: SidebarProps) {
               <div key={itemId} className="space-y-1">
                 <button
                   type="button"
-                  onClick={() => {
-                    if (isFinanceParent && !isExpanded) {
-                      setIsFinanceExpanded(true);
-                      router.push(item.href);
-                      return;
-                    }
-                    setIsFinanceExpanded((prev) => !prev);
-                  }}
+                  onClick={() => setIsFinanceExpanded((prev) => !prev)}
                   className={`group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition ${
                     isActive
                       ? "bg-blue-600/20 text-blue-200 shadow-[inset_0_0_0_1px_rgba(96,165,250,0.45)]"
