@@ -8,6 +8,7 @@ import type { ShipmentActionState } from "@/app/(dashboard)/shipments/actions";
 
 type ShipmentDefaults = {
   id?: string;
+  shipmentNumber?: string;
   customerId?: string;
   quoteId?: string;
   quoteNumber?: string;

@@ -235,7 +235,7 @@ function payableStatusLabel(
   today: Date,
   outstanding: number,
 ): "PAID" | "OVERDUE" | "CANCELLED" | InvoiceStatus | ShipmentCostStatus | GeneralExpenseStatus {
-  if (outstanding <= 0 || status === ShipmentCostStatus.PAID || status === GeneralExpenseStatus.PAID) {
+  if (outstanding <= 0 || status === "PAID") {
     return "PAID";
   }
   if (status === "CANCELLED") return "CANCELLED";
@@ -602,7 +602,7 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
       party: cost.supplierName,
       reference: cost.customConcept?.trim() || cost.conceptCategory.replaceAll("_", " "),
       expectedDate,
-      actualDate: cost.status === ShipmentCostStatus.PAID ? expectedDate : null,
+      actualDate: null,
     });
   }
 
