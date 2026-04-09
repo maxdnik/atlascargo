@@ -101,11 +101,66 @@ export function Sidebar({ items = defaultNavItems }: SidebarProps) {
   const pathname = usePathname();
   const normalizedPathname = normalizePath(pathname);
   const isFinanceRoute = normalizedPathname === "/finance" || normalizedPathname.startsWith("/finance/");
-  const [isFinanceExpanded, setIsFinanceExpanded] = useState(false);
+  const [financeToggleState, setFinanceToggleState] = useState<{
+    path: string;
+    expanded: boolean;
+  }>({
+    path: "",
+    expanded: false,
+  });
+
+  const processedItems = useMemo(() => {
+    const clonedItems = items.map((item) => ({
+      ...item,
+      children: item.children ? [...item.children] : undefined,
+    }));
+    const financeParent = clonedItems.find(
+      (item) => item.id === "finance" || item.href === "/finance",
+    );
+
+    if (!financeParent) {
+      return clonedItems;
+    }
+
+    const standaloneFinanceChildren = clonedItems
+      .filter(
+        (item) =>
+          item !== financeParent &&
+          item.section === "finance" &&
+          item.href.startsWith("/finance/"),
+      )
+      .map((item) => ({
+        id: item.id,
+        href: item.href,
+        label: item.label,
+        match: item.match,
+      }));
+
+    if (standaloneFinanceChildren.length > 0) {
+      const mergedChildren = financeParent.children ? [...financeParent.children] : [];
+      const existingByHref = new Set(mergedChildren.map((child) => child.href));
+      for (const child of standaloneFinanceChildren) {
+        if (!existingByHref.has(child.href)) {
+          mergedChildren.push(child);
+          existingByHref.add(child.href);
+        }
+      }
+      financeParent.children = mergedChildren;
+    }
+
+    return clonedItems.filter(
+      (item) =>
+        !(
+          item !== financeParent &&
+          item.section === "finance" &&
+          item.href.startsWith("/finance/")
+        ),
+    );
+  }, [items]);
 
   const activeChildByParent = useMemo(() => {
     const active = new Map<string, string | null>();
-    for (const item of items) {
+    for (const item of processedItems) {
       if (!item.children || item.children.length === 0) continue;
       const parentId = item.id ?? `${item.href}-${item.label}`;
       const childMatch = [...item.children]
@@ -115,7 +170,7 @@ export function Sidebar({ items = defaultNavItems }: SidebarProps) {
       active.set(parentId, childId);
     }
     return active;
-  }, [items, normalizedPathname]);
+  }, [processedItems, normalizedPathname]);
 
   return (
     <aside className="z-30 hidden h-screen w-72 shrink-0 border-r border-slate-800 bg-slate-950 lg:sticky lg:top-0 lg:block">
@@ -127,7 +182,7 @@ export function Sidebar({ items = defaultNavItems }: SidebarProps) {
         <p className="mt-1 text-xs text-slate-400">Freight forwarding live workspace</p>
       </div>
       <nav className="space-y-1 p-4">
-        {items.map((item) => {
+        {processedItems.map((item) => {
           const itemId = item.id ?? `${item.href}-${item.label}`;
           const hasChildren = Boolean(item.children && item.children.length > 0);
           const isChildActive = Boolean(activeChildByParent.get(itemId));
@@ -135,14 +190,24 @@ export function Sidebar({ items = defaultNavItems }: SidebarProps) {
           const isActive = isDirectActive || isChildActive;
           const Icon = iconMap[item.icon];
           const isFinanceParent = itemId === "finance" && hasChildren;
-          const isExpanded = isFinanceParent ? isFinanceRoute || isFinanceExpanded : false;
+          const isExpanded = isFinanceParent
+            ? isFinanceRoute ||
+              (financeToggleState.path === normalizedPathname && financeToggleState.expanded)
+            : false;
 
           if (hasChildren) {
             return (
               <div key={itemId} className="space-y-1">
                 <button
                   type="button"
-                  onClick={() => setIsFinanceExpanded((prev) => !prev)}
+                  onClick={() => {
+                    if (isFinanceRoute) return;
+                    setFinanceToggleState((prev) => ({
+                      path: normalizedPathname,
+                      expanded:
+                        prev.path === normalizedPathname ? !prev.expanded : true,
+                    }));
+                  }}
                   className={`group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition ${
                     isActive
                       ? "bg-blue-600/20 text-blue-200 shadow-[inset_0_0_0_1px_rgba(96,165,250,0.45)]"
