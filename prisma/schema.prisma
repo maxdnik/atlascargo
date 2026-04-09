@@ -1,0 +1,1086 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  MANAGEMENT
+  SALES
+  OPERATIONS
+  CUSTOMER_SERVICE
+  ADMINISTRATION
+  FINANCE
+}
+
+enum PermissionAction {
+  VIEW
+  CREATE
+  EDIT
+  DELETE
+  APPROVE
+  VIEW_FINANCIALS
+}
+
+enum PermissionResource {
+  DASHBOARD
+  CUSTOMERS
+  QUOTES
+  SHIPMENTS
+  DOCUMENTS
+  REVENUE
+  EXPENSES
+  REPORTS
+  ADMIN
+}
+
+enum TransportMode {
+  AIR
+  OCEAN
+  COURIER
+  ROAD
+  RAIL
+  MULTIMODAL
+  SPECIAL
+}
+
+enum TradeDirection {
+  IMPORT
+  EXPORT
+  CROSS_TRADE
+}
+
+enum ShipmentStatus {
+  DRAFT
+  BOOKING_REQUESTED
+  BOOKING_CONFIRMED
+  IN_TRANSIT
+  ARRIVED
+  CUSTOMS
+  DELIVERED
+  CLOSED
+  CANCELLED
+}
+
+enum QuoteStatus {
+  DRAFT
+  SENT
+  APPROVED
+  REJECTED
+  EXPIRED
+}
+
+enum MilestoneStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  DELAYED
+  CANCELLED
+}
+
+enum FinanceStatus {
+  DRAFT
+  POSTED
+  PARTIALLY_PAID
+  PAID
+  OVERDUE
+  CANCELLED
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  DONE
+  CANCELLED
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum PartnerType {
+  AGENT
+  SUPPLIER
+  CARRIER
+  CUSTOMS_BROKER
+  TERMINAL
+  TRUCKER
+  WAREHOUSE
+  OTHER
+}
+
+enum ShipmentPartyRole {
+  SHIPPER
+  CONSIGNEE
+  NOTIFY
+  AGENT_ORIGIN
+  AGENT_DESTINATION
+}
+
+enum DocumentType {
+  COMMERCIAL_INVOICE
+  PACKING_LIST
+  HBL
+  MBL
+  HAWB
+  MAWB
+  CERTIFICATE
+  PERMIT
+  POD
+  OTHER
+}
+
+enum DocumentRecordStatus {
+  PENDING
+  RECEIVED
+  VERIFIED
+}
+
+enum FinancialRecordStatus {
+  PENDING
+  INVOICED
+  PAID
+}
+
+enum InvoiceStatus {
+  DRAFT
+  READY_TO_ISSUE
+  ISSUED
+  PAID
+  CANCELLED
+}
+
+enum InvoiceLineType {
+  FREIGHT
+  HANDLING
+  CUSTOMS
+  DOCUMENTATION
+  OTHER
+}
+
+enum GeneralExpenseCategory {
+  SALARIES
+  SOCIAL_SECURITY
+  INSURANCE
+  MESSENGER
+  INTERNET
+  RENT
+  NOTARY
+  OTHER
+}
+
+enum GeneralExpenseStatus {
+  PENDING
+  PAID
+  CANCELLED
+}
+
+enum ShipmentCostCategory {
+  OCEAN_FREIGHT
+  AIR_FREIGHT
+  ORIGIN_CHARGES
+  DESTINATION_CHARGES
+  TERMINAL
+  TRUCKING
+  CUSTOMS_BROKER
+  DOCUMENTATION
+  HANDLING
+  OTHER
+}
+
+enum ShipmentCostStatus {
+  PENDING
+  CONFIRMED
+  PAID
+}
+
+enum NotificationLevel {
+  INFO
+  WARNING
+  ERROR
+  SUCCESS
+}
+
+enum ActivityAction {
+  CREATE
+  UPDATE
+  DELETE
+  CONVERT
+  APPROVE
+  LOGIN
+  LOGOUT
+}
+
+enum EntityType {
+  CUSTOMER
+  QUOTE
+  SHIPMENT
+  MILESTONE
+  DOCUMENT
+  REVENUE
+  EXPENSE
+  TASK
+  USER
+  SETTINGS
+}
+
+model Company {
+  id        String   @id @default(cuid())
+  legalName String
+  tradeName String?
+  taxId     String?
+  country   String?
+  timezone  String   @default("UTC")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  branches      Branch[]
+  users         User[]
+  roles         Role[]
+  customers     Customer[]
+  prospects     Prospect[]
+  partners      BusinessPartner[]
+  quotes        Quote[]
+  shipments     Shipment[]
+  shipmentNumberCounters ShipmentNumberCounter[]
+  revenues      Revenue[]
+  expenses      Expense[]
+  shipmentCosts ShipmentCost[]
+  exchangeRates ExchangeRate[]
+  invoices      Invoice[]
+  generalExpenses GeneralExpense[]
+  payments      Payment[]
+  tasks         Task[]
+  notes         Note[]
+  activities    ActivityLog[]
+}
+
+model Branch {
+  id        String   @id @default(cuid())
+  companyId String
+  code      String
+  name      String
+  city      String?
+  country   String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company     Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  usersAccess UserBranchAccess[]
+  customers   Customer[]
+  prospects   Prospect[]
+  quotes      Quote[]
+  shipments   Shipment[]
+  revenues    Revenue[]
+  expenses    Expense[]
+  shipmentCosts ShipmentCost[]
+  invoices    Invoice[]
+  generalExpenses GeneralExpense[]
+  payments    Payment[]
+
+  @@unique([companyId, code])
+  @@index([companyId, active])
+}
+
+model User {
+  id           String   @id @default(cuid())
+  companyId    String
+  email        String
+  name         String
+  passwordHash String
+  role         UserRole @default(OPERATIONS)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  company            Company              @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branchAccesses     UserBranchAccess[]
+  roles              UserRoleAssignment[]
+  permissionOverrides UserPermissionOverride[]
+  ownedQuotes        Quote[]              @relation("QuoteOwner")
+  ownedShipments     Shipment[]           @relation("ShipmentOwner")
+  milestonesAssigned ShipmentMilestone[]  @relation("MilestoneAssignee")
+  tasksAssigned      Task[]               @relation("TaskAssignee")
+  activities         ActivityLog[]        @relation("ActivityActor")
+  notifications      Notification[]
+  uploadedDocuments  ShipmentDocument[]   @relation("DocumentUploader")
+
+  @@unique([companyId, email])
+  @@index([companyId, role, isActive])
+}
+
+model Role {
+  id          String   @id @default(cuid())
+  companyId   String
+  code        UserRole
+  name        String
+  description String?
+  isSystem    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  company         Company              @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  permissions     RolePermission[]
+  userAssignments UserRoleAssignment[]
+
+  @@unique([companyId, code])
+}
+
+model Permission {
+  id          String             @id @default(cuid())
+  resource    PermissionResource
+  action      PermissionAction
+  description String?
+  createdAt   DateTime           @default(now())
+
+  rolePermissions RolePermission[]
+  userOverrides   UserPermissionOverride[]
+
+  @@unique([resource, action])
+}
+
+model RolePermission {
+  id           String @id @default(cuid())
+  roleId       String
+  permissionId String
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+}
+
+model UserRoleAssignment {
+  id     String @id @default(cuid())
+  userId String
+  roleId String
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, roleId])
+}
+
+model UserPermissionOverride {
+  id           String   @id @default(cuid())
+  userId       String
+  permissionId String
+  allowed      Boolean
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, permissionId])
+  @@index([userId, allowed])
+}
+
+model UserBranchAccess {
+  id             String   @id @default(cuid())
+  userId         String
+  branchId       String
+  canViewFinance Boolean  @default(false)
+  canApprove     Boolean  @default(false)
+  createdAt      DateTime @default(now())
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  branch Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, branchId])
+}
+
+model Currency {
+  code      String   @id
+  name      String
+  symbol    String?
+  decimals  Int      @default(2)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  quotes       Quote[]
+  revenues     Revenue[]
+  expenses     Expense[]
+  shipmentCosts ShipmentCost[]
+  invoices     Invoice[]
+  generalExpenses GeneralExpense[]
+  payments     Payment[]
+  quoteItems   QuoteItem[]
+  quoteCharges QuoteCharge[]
+}
+
+model Incoterm {
+  code        String   @id
+  description String
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  shipments Shipment[]
+  quotes    Quote[]
+}
+
+model Port {
+  id        String   @id @default(cuid())
+  code      String
+  name      String
+  country   String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  shipmentPol   Shipment[]    @relation("ShipmentPOLPort")
+  shipmentPod   Shipment[]    @relation("ShipmentPODPort")
+  legOriginPort ShipmentLeg[] @relation("LegOriginPort")
+  legDestPort   ShipmentLeg[] @relation("LegDestinationPort")
+
+  @@unique([code, country])
+}
+
+model Airport {
+  id        String   @id @default(cuid())
+  iataCode  String   @unique
+  name      String
+  city      String
+  country   String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  shipmentOrigin      Shipment[]    @relation("ShipmentOriginAirport")
+  shipmentDestination Shipment[]    @relation("ShipmentDestinationAirport")
+  legOriginAirport    ShipmentLeg[] @relation("LegOriginAirport")
+  legDestAirport      ShipmentLeg[] @relation("LegDestinationAirport")
+}
+
+model Customer {
+  id               String   @id @default(cuid())
+  companyId        String
+  branchId         String?
+  code             String
+  legalName        String
+  tradeName        String?
+  taxId            String?
+  country          String?
+  city             String?
+  address          String?
+  paymentTermsDays Int      @default(30)
+  isActive         Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  company   Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch    Branch?    @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  contacts  Contact[]
+  quotes    Quote[]
+  shipments Shipment[]
+  revenues  Revenue[]
+  invoices  Invoice[]
+  notes     Note[]
+
+  @@unique([companyId, code])
+  @@index([companyId, legalName])
+}
+
+model Prospect {
+  id            String   @id @default(cuid())
+  companyId     String
+  branchId      String?
+  companyName   String
+  status        String
+  source        String?
+  assignedToId  String?
+  convertedToId String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch   Branch?   @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  contacts Contact[]
+}
+
+model Contact {
+  id         String   @id @default(cuid())
+  customerId String?
+  prospectId String?
+  fullName   String
+  email      String?
+  phone      String?
+  position   String?
+  isPrimary  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  customer Customer? @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  prospect Prospect? @relation(fields: [prospectId], references: [id], onDelete: Cascade)
+
+  @@index([customerId, isPrimary])
+}
+
+model BusinessPartner {
+  id          String      @id @default(cuid())
+  companyId   String
+  partnerType PartnerType
+  name        String
+  country     String?
+  city        String?
+  taxId       String?
+  email       String?
+  phone       String?
+  active      Boolean     @default(true)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  company       Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  shipmentParty ShipmentParty[]
+  shipmentLegs  ShipmentLeg[]
+  expenses      Expense[]
+
+  @@index([companyId, partnerType, active])
+  @@index([companyId, name])
+}
+
+model Quote {
+  id            String         @id @default(cuid())
+  companyId     String
+  branchId      String?
+  quoteNumber   String
+  customerId    String
+  ownerUserId   String?
+  mode          TransportMode
+  direction     TradeDirection
+  status        QuoteStatus    @default(DRAFT)
+  incotermCode  String?
+  originCode    String?
+  destinationCode String?
+  pol           String?
+  pod           String?
+  airportOrigin String?
+  airportDestination String?
+  placeOfReceipt String?
+  placeOfDelivery String?
+  commodity     String?
+  validUntil    DateTime?
+  currencyCode  String
+  exchangeRate  Decimal?
+  totalBuy      Decimal        @default(0)
+  totalSell     Decimal        @default(0)
+  marginAmount  Decimal        @default(0)
+  marginPct     Decimal        @default(0)
+  internalNotes String?
+  sentAt        DateTime?
+  approvedAt    DateTime?
+  rejectedAt    DateTime?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  company  Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch   Branch?       @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  customer Customer      @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  owner    User?         @relation("QuoteOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  incoterm Incoterm?     @relation(fields: [incotermCode], references: [code], onDelete: SetNull)
+  currency Currency      @relation(fields: [currencyCode], references: [code], onDelete: Restrict)
+  items    QuoteItem[]
+  charges  QuoteCharge[]
+  shipment Shipment?
+  notes    Note[]
+
+  @@unique([companyId, quoteNumber])
+  @@index([companyId, status, createdAt])
+  @@index([companyId, customerId])
+}
+
+model QuoteItem {
+  id           String   @id @default(cuid())
+  quoteId      String
+  description  String
+  qty          Decimal  @default(1)
+  uom          String?
+  buyAmount    Decimal  @default(0)
+  sellAmount   Decimal  @default(0)
+  currencyCode String
+  createdAt    DateTime @default(now())
+
+  quote    Quote    @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  currency Currency @relation(fields: [currencyCode], references: [code], onDelete: Restrict)
+}
+
+model QuoteCharge {
+  id           String   @id @default(cuid())
+  quoteId      String
+  concept      String
+  chargeType   String?
+  buyAmount    Decimal  @default(0)
+  sellAmount   Decimal  @default(0)
+  currencyCode String
+  createdAt    DateTime @default(now())
+
+  quote    Quote    @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  currency Currency @relation(fields: [currencyCode], references: [code], onDelete: Restrict)
+}
+
+model Shipment {
+  id                   String         @id @default(cuid())
+  companyId            String
+  branchId             String?
+  shipmentNumber       String
+  customerId           String
+  quoteId              String?        @unique
+  ownerUserId          String?
+  mode                 TransportMode
+  direction            TradeDirection
+  status               ShipmentStatus @default(DRAFT)
+  originCode           String?
+  destinationCode      String?
+  pol                  String?
+  pod                  String?
+  airportOrigin        String?
+  airportDestination   String?
+  placeOfReceipt       String?
+  placeOfDelivery      String?
+  shipperName          String?
+  consigneeName        String?
+  notifyPartyName      String?
+  agentOriginName      String?
+  agentDestinationName String?
+  carrierName          String?
+  vesselOrFlight       String?
+  incotermCode         String?
+  serviceLevel         String?
+  referenceClient      String?
+  referenceInternal    String?
+  bookingRef           String?
+  houseRef             String?
+  masterRef            String?
+  commodity            String?
+  packageCount         Int?
+  packageType          String?
+  grossWeightKg        Decimal?
+  chargeableWeightKg   Decimal?
+  volumeM3             Decimal?
+  containerCount       Int?
+  containerType        String?
+  cargoReadyDate       DateTime?
+  etd                  DateTime?
+  eta                  DateTime?
+  atd                  DateTime?
+  ata                  DateTime?
+  deliveredAt          DateTime?
+  polPortId            String?
+  podPortId            String?
+  originAirportId      String?
+  destinationAirportId String?
+  notes                String?
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+
+  company            Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch             Branch?             @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  customer           Customer            @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  quote              Quote?              @relation(fields: [quoteId], references: [id], onDelete: SetNull)
+  owner              User?               @relation("ShipmentOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  incoterm           Incoterm?           @relation(fields: [incotermCode], references: [code], onDelete: SetNull)
+  polPort            Port?               @relation("ShipmentPOLPort", fields: [polPortId], references: [id], onDelete: SetNull)
+  podPort            Port?               @relation("ShipmentPODPort", fields: [podPortId], references: [id], onDelete: SetNull)
+  originAirport      Airport?            @relation("ShipmentOriginAirport", fields: [originAirportId], references: [id], onDelete: SetNull)
+  destinationAirport Airport?            @relation("ShipmentDestinationAirport", fields: [destinationAirportId], references: [id], onDelete: SetNull)
+  parties            ShipmentParty[]
+  legs               ShipmentLeg[]
+  containers         Container[]
+  milestones         ShipmentMilestone[]
+  documents          ShipmentDocument[]
+  revenues           Revenue[]
+  expenses           Expense[]
+  shipmentCosts      ShipmentCost[]
+  invoices           Invoice[]
+  tasks              Task[]
+  notesLog           Note[]
+
+  @@unique([companyId, shipmentNumber])
+  @@index([shipmentNumber])
+  @@index([companyId, status, mode])
+  @@index([companyId, eta])
+  @@index([companyId, customerId])
+}
+
+model ShipmentNumberCounter {
+  id        String   @id @default(cuid())
+  companyId String
+  prefix    String
+  nextValue Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, prefix])
+  @@index([companyId, prefix, nextValue])
+}
+
+model ShipmentParty {
+  id         String            @id @default(cuid())
+  shipmentId String
+  role       ShipmentPartyRole
+  partnerId  String?
+  partyName  String
+  createdAt  DateTime          @default(now())
+
+  shipment Shipment         @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  partner  BusinessPartner? @relation(fields: [partnerId], references: [id], onDelete: SetNull)
+
+  @@index([shipmentId, role])
+}
+
+model ShipmentLeg {
+  id                   String        @id @default(cuid())
+  shipmentId           String
+  sequence             Int
+  mode                 TransportMode
+  originPortId         String?
+  destinationPortId    String?
+  originAirportId      String?
+  destinationAirportId String?
+  carrierPartnerId     String?
+  vesselFlight         String?
+  etd                  DateTime?
+  eta                  DateTime?
+  atd                  DateTime?
+  ata                  DateTime?
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+
+  shipment           Shipment         @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  originPort         Port?            @relation("LegOriginPort", fields: [originPortId], references: [id], onDelete: SetNull)
+  destinationPort    Port?            @relation("LegDestinationPort", fields: [destinationPortId], references: [id], onDelete: SetNull)
+  originAirport      Airport?         @relation("LegOriginAirport", fields: [originAirportId], references: [id], onDelete: SetNull)
+  destinationAirport Airport?         @relation("LegDestinationAirport", fields: [destinationAirportId], references: [id], onDelete: SetNull)
+  carrierPartner     BusinessPartner? @relation(fields: [carrierPartnerId], references: [id], onDelete: SetNull)
+
+  @@unique([shipmentId, sequence])
+}
+
+model Container {
+  id            String   @id @default(cuid())
+  shipmentId    String
+  containerNo   String
+  containerType String
+  sealNo        String?
+  tareWeightKg  Decimal?
+  grossWeightKg Decimal?
+  createdAt     DateTime @default(now())
+
+  shipment Shipment @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+
+  @@index([shipmentId, containerNo])
+}
+
+model ShipmentMilestone {
+  id           String          @id @default(cuid())
+  shipmentId   String
+  code         String
+  label        String
+  expectedAt   DateTime?
+  actualAt     DateTime?
+  status       MilestoneStatus @default(PENDING)
+  isCritical   Boolean         @default(false)
+  assignedToId String?
+  comment      String?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  shipment   Shipment @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  assignedTo User?    @relation("MilestoneAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+
+  @@unique([shipmentId, code])
+  @@index([shipmentId, status, expectedAt])
+}
+
+model ShipmentDocument {
+  id              String               @id @default(cuid())
+  shipmentId      String
+  docType         DocumentType
+  fileName        String
+  referenceNumber String?
+  issueDate       DateTime?
+  uploadedById    String?
+  uploadedAt      DateTime             @default(now())
+  version         Int                  @default(1)
+  status          DocumentRecordStatus @default(PENDING)
+  notes           String?
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+
+  shipment   Shipment @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  uploadedBy User?    @relation("DocumentUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  @@index([shipmentId, docType, status])
+}
+
+model Revenue {
+  id           String                @id @default(cuid())
+  companyId    String
+  branchId     String?
+  shipmentId   String
+  customerId   String
+  concept      String
+  amount       Decimal
+  currencyCode String
+  exchangeRate Decimal?
+  amountBase   Decimal
+  dueDate      DateTime?
+  status       FinancialRecordStatus @default(PENDING)
+  notes        String?
+  createdAt    DateTime              @default(now())
+  updatedAt    DateTime              @updatedAt
+
+  company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch   Branch?   @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  shipment Shipment  @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  customer Customer  @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  currency Currency  @relation(fields: [currencyCode], references: [code], onDelete: Restrict)
+  payments Payment[]
+
+  @@index([companyId, dueDate, status])
+  @@index([customerId, status])
+}
+
+model Expense {
+  id           String                @id @default(cuid())
+  companyId    String
+  branchId     String?
+  shipmentId   String
+  supplierId   String?
+  supplierName String
+  concept      String
+  amount       Decimal
+  currencyCode String
+  exchangeRate Decimal?
+  amountBase   Decimal
+  dueDate      DateTime?
+  status       FinancialRecordStatus @default(PENDING)
+  notes        String?
+  createdAt    DateTime              @default(now())
+  updatedAt    DateTime              @updatedAt
+
+  company  Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch   Branch?          @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  shipment Shipment         @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  supplier BusinessPartner? @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  currency Currency         @relation(fields: [currencyCode], references: [code], onDelete: Restrict)
+  payments Payment[]
+
+  @@index([companyId, dueDate, status])
+  @@index([supplierId, status])
+}
+
+model ShipmentCost {
+  id              String               @id @default(cuid())
+  companyId       String
+  branchId        String?
+  shipmentId      String
+  supplierName    String
+  conceptCategory ShipmentCostCategory
+  customConcept   String?
+  amount          Decimal
+  currencyCode    String
+  dueDate         DateTime?
+  status          ShipmentCostStatus   @default(PENDING)
+  notes           String?
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+
+  company  Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch   Branch?  @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  shipment Shipment @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  currency Currency @relation(fields: [currencyCode], references: [code], onDelete: Restrict)
+
+  @@index([companyId, shipmentId, status])
+  @@index([companyId, dueDate])
+  @@index([companyId, conceptCategory])
+}
+
+model Invoice {
+  id            String        @id @default(cuid())
+  companyId     String
+  branchId      String?
+  invoiceNumber String
+  shipmentId    String
+  customerId    String
+  currencyCode  String
+  subtotal      Decimal       @default(0)
+  taxes         Decimal       @default(0)
+  total         Decimal       @default(0)
+  status        InvoiceStatus @default(DRAFT)
+  issueDate     DateTime?
+  dueDate       DateTime?
+  afipCAE       String?
+  afipNumber    String?
+  afipStatus    String?
+  notes         String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch   Branch?   @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  shipment Shipment  @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  customer Customer  @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  currency Currency  @relation(fields: [currencyCode], references: [code], onDelete: Restrict)
+  lines    InvoiceLine[]
+  payments Payment[]
+
+  @@unique([companyId, invoiceNumber])
+  @@index([companyId, shipmentId, status])
+  @@index([companyId, customerId, status])
+}
+
+model InvoiceLine {
+  id          String          @id @default(cuid())
+  invoiceId   String
+  description String
+  amount      Decimal
+  type        InvoiceLineType
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId, type])
+}
+
+model GeneralExpense {
+  id              String                 @id @default(cuid())
+  companyId       String
+  branchId        String?
+  conceptCategory GeneralExpenseCategory
+  customConcept   String?
+  amount          Decimal
+  currencyCode    String
+  dueDate         DateTime?
+  status          GeneralExpenseStatus   @default(PENDING)
+  notes           String?
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+
+  company  Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch   Branch?  @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  currency Currency @relation(fields: [currencyCode], references: [code], onDelete: Restrict)
+
+  @@index([companyId, conceptCategory, status])
+  @@index([companyId, dueDate])
+}
+
+model Payment {
+  id           String   @id @default(cuid())
+  companyId    String
+  branchId     String?
+  revenueId    String?
+  expenseId    String?
+  invoiceId    String?
+  currencyCode String
+  amount       Decimal
+  paymentDate  DateTime
+  method       String?
+  reference    String?
+  notes        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  company  Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch   Branch?  @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  revenue  Revenue? @relation(fields: [revenueId], references: [id], onDelete: SetNull)
+  expense  Expense? @relation(fields: [expenseId], references: [id], onDelete: SetNull)
+  invoice  Invoice? @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  currency Currency @relation(fields: [currencyCode], references: [code], onDelete: Restrict)
+
+  @@index([companyId, paymentDate])
+}
+
+model ExchangeRate {
+  id            String   @id @default(cuid())
+  companyId     String
+  baseCurrency  String
+  quoteCurrency String
+  rate          Decimal
+  date          DateTime
+  createdAt     DateTime @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, baseCurrency, quoteCurrency, date])
+}
+
+model Task {
+  id           String       @id @default(cuid())
+  companyId    String
+  shipmentId   String?
+  title        String
+  description  String?
+  dueAt        DateTime?
+  status       TaskStatus   @default(TODO)
+  priority     TaskPriority @default(MEDIUM)
+  assignedToId String?
+  createdById  String?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  company    Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  shipment   Shipment? @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  assignedTo User?     @relation("TaskAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, status, dueAt])
+}
+
+model Note {
+  id          String   @id @default(cuid())
+  companyId   String
+  shipmentId  String?
+  quoteId     String?
+  customerId  String?
+  content     String
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  shipment Shipment? @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  quote    Quote?    @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  customer Customer? @relation(fields: [customerId], references: [id], onDelete: Cascade)
+}
+
+model ActivityLog {
+  id         String         @id @default(cuid())
+  companyId  String
+  entityType EntityType
+  entityId   String
+  action     ActivityAction
+  beforeJson Json?
+  afterJson  Json?
+  actorId    String?
+  ip         String?
+  userAgent  String?
+  createdAt  DateTime       @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  actor   User?   @relation("ActivityActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([entityType, entityId, createdAt])
+  @@index([companyId, createdAt])
+}
+
+model Notification {
+  id        String            @id @default(cuid())
+  userId    String
+  title     String
+  body      String?
+  level     NotificationLevel @default(INFO)
+  link      String?
+  readAt    DateTime?
+  createdAt DateTime          @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt, createdAt])
+}
