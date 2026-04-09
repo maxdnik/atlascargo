@@ -27,6 +27,7 @@ export default async function DashboardLayout({
   );
   const visibleModules = moduleAccess.size > 0 ? moduleAccess : fallbackViewModules;
   const navItems: SidebarNavItem[] = [];
+  const financeChildren: SidebarNavItem[] = [];
 
   if (visibleModules.has(PermissionResource.DASHBOARD)) {
     navItems.push({
@@ -81,21 +82,8 @@ export default async function DashboardLayout({
       section: "quotes",
     });
   }
-  if (
-    visibleModules.has(PermissionResource.REVENUE) ||
-    visibleModules.has(PermissionResource.EXPENSES)
-  ) {
-    navItems.push({
-      id: "finance",
-      href: "/finance",
-      label: "Finance",
-      icon: "finance",
-      section: "finance",
-      match: "exact",
-    });
-  }
   if (visibleModules.has(PermissionResource.REVENUE)) {
-    navItems.push({
+    financeChildren.push({
       id: "invoices",
       href: "/finance/invoices",
       label: "Invoices",
@@ -105,7 +93,7 @@ export default async function DashboardLayout({
     });
   }
   if (visibleModules.has(PermissionResource.EXPENSES)) {
-    navItems.push({
+    financeChildren.push({
       id: "general-expenses",
       href: "/finance/expenses",
       label: "General Expenses",
@@ -115,7 +103,7 @@ export default async function DashboardLayout({
     });
   }
   if (visibleModules.has(PermissionResource.REVENUE)) {
-    navItems.push({
+    financeChildren.push({
       id: "finance-ar",
       href: "/finance/ar",
       label: "Accounts Receivable",
@@ -125,7 +113,7 @@ export default async function DashboardLayout({
     });
   }
   if (visibleModules.has(PermissionResource.EXPENSES)) {
-    navItems.push({
+    financeChildren.push({
       id: "finance-ap",
       href: "/finance/ap",
       label: "Accounts Payable",
@@ -138,7 +126,7 @@ export default async function DashboardLayout({
     visibleModules.has(PermissionResource.REVENUE) &&
     visibleModules.has(PermissionResource.EXPENSES)
   ) {
-    navItems.push({
+    financeChildren.push({
       id: "finance-profitability",
       href: "/finance/profitability",
       label: "Shipment Profitability",
@@ -151,13 +139,24 @@ export default async function DashboardLayout({
     visibleModules.has(PermissionResource.REVENUE) ||
     visibleModules.has(PermissionResource.EXPENSES)
   ) {
-    navItems.push({
+    financeChildren.push({
       id: "finance-forecast",
       href: "/finance/forecast",
       label: "Cash Forecast",
       icon: "finance",
       section: "finance",
       match: "prefix",
+    });
+  }
+  if (financeChildren.length > 0) {
+    navItems.push({
+      id: "finance",
+      href: "/finance",
+      label: "Finance",
+      icon: "finance",
+      section: "finance",
+      match: "prefix",
+      children: financeChildren,
     });
   }
   if (visibleModules.has(PermissionResource.ADMIN)) {
