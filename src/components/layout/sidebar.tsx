@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
+  AlertTriangle,
   BarChart3,
   BriefcaseBusiness,
   LayoutDashboard,
@@ -14,6 +15,7 @@ import {
 
 const iconMap = {
   dashboard: LayoutDashboard,
+  actionCenter: AlertTriangle,
   shipments: ShipWheel,
   quotes: Package,
   customers: Users2,
@@ -39,6 +41,13 @@ type SidebarProps = {
 
 const defaultNavItems: SidebarNavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: "dashboard", section: "dashboard", match: "prefix" },
+  {
+    href: "/dashboard/action-center",
+    label: "Action Center",
+    icon: "actionCenter",
+    section: "dashboard",
+    match: "prefix",
+  },
   { href: "/shipments", label: "Shipments", icon: "shipments", section: "shipments", match: "prefix" },
   { href: "/quotes", label: "Quotes", icon: "quotes", section: "quotes", match: "prefix" },
   { href: "/customers", label: "Customers", icon: "customers", section: "customers", match: "prefix" },

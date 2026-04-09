@@ -36,6 +36,14 @@ export default async function DashboardLayout({
       icon: "dashboard",
       section: "dashboard",
     });
+    navItems.push({
+      id: "action-center",
+      href: "/dashboard/action-center",
+      label: "Action Center",
+      icon: "actionCenter",
+      section: "dashboard",
+      match: "prefix",
+    });
   }
   if (visibleModules.has(PermissionResource.REPORTS)) {
     navItems.push({
