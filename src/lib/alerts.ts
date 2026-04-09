@@ -4,6 +4,7 @@ import {
   AlertType,
   InvoiceStatus,
   ShipmentStatus,
+  type Alert,
 } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { notifyAlertCreated } from "@/lib/notifications";
