@@ -1,5 +1,8 @@
 "use server";
 
+import { randomUUID } from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import {
@@ -855,14 +858,12 @@ const milestoneUpdateSchema = z.object({
 });
 
 const shipmentDocumentSchema = z.object({
-  id: z.string().optional(),
+  replaceOfId: z.string().optional(),
   shipmentId: z.string().min(1),
   docType: z.nativeEnum(DocumentType),
-  fileName: z.string().min(2).max(180),
   referenceNumber: z.string().max(80).optional(),
   issueDate: z.string().optional(),
-  version: z.coerce.number().int().min(1).max(100).optional(),
-  status: z.nativeEnum(DocumentRecordStatus),
+  status: z.nativeEnum(DocumentRecordStatus).optional(),
   notes: z.string().max(600).optional(),
 });
 
@@ -956,6 +957,30 @@ function parseDocumentStatus(value: FormDataEntryValue | null) {
   return normalized as DocumentRecordStatus;
 }
 
+function sanitizeDocumentFileName(fileName: string) {
+  const normalized = fileName.trim().replaceAll("\\", "/");
+  const base = normalized.includes("/") ? normalized.slice(normalized.lastIndexOf("/") + 1) : normalized;
+  const cleaned = base.replace(/[^a-zA-Z0-9._-]/g, "_");
+  return cleaned.length > 0 ? cleaned.slice(0, 180) : "document.bin";
+}
+
+async function persistShipmentDocumentFile(input: { shipmentId: string; file: File }) {
+  const cleanedFileName = sanitizeDocumentFileName(input.file.name);
+  const extension = path.extname(cleanedFileName) || ".bin";
+  const storedFileName = `${Date.now()}-${randomUUID()}${extension}`;
+  const relativeDir = path.join("uploads", "shipments", input.shipmentId);
+  const absoluteDir = path.join(process.cwd(), "public", relativeDir);
+  await mkdir(absoluteDir, { recursive: true });
+
+  const bytes = Buffer.from(await input.file.arrayBuffer());
+  await writeFile(path.join(absoluteDir, storedFileName), bytes);
+
+  return {
+    fileName: cleanedFileName,
+    fileUrl: `/${relativeDir.replaceAll(path.sep, "/")}/${storedFileName}`,
+  };
+}
+
 
 async function assertShipmentAccess(companyId: string, shipmentId: string) {
   const shipment = await prisma.shipment.findFirst({
@@ -980,61 +1005,71 @@ export async function upsertShipmentDocumentAction(
 ): Promise<ShipmentActionState> {
   try {
     const ctx = await getContext("SHIPMENTS", "EDIT");
+    const file = formData.get("file");
+    if (!(file instanceof File) || file.size <= 0) {
+      throw new Error("Document file is required");
+    }
+
     const parsed = shipmentDocumentSchema.parse({
-      id: formData.get("id") || undefined,
+      replaceOfId: formData.get("replaceOfId") || undefined,
       shipmentId: formData.get("shipmentId"),
       docType: parseDocumentType(formData.get("docType")),
-      fileName: formData.get("fileName"),
       referenceNumber: formData.get("referenceNumber") || undefined,
       issueDate: String(formData.get("issueDate") || ""),
-      version: formData.get("version") || undefined,
-      status: parseDocumentStatus(formData.get("status")),
+      status: parseDocumentStatus(formData.get("status") ?? DocumentRecordStatus.PENDING),
       notes: formData.get("notes") || undefined,
     });
 
     const shipment = await assertShipmentAccess(ctx.companyId, parsed.shipmentId);
     const issueDate = toDate(parsed.issueDate);
-    const payload: {
-      shipmentId: string;
-      docType: DocumentType;
-      fileName: string;
-      referenceNumber: string | null;
-      issueDate: Date | null;
-      version: number;
-      status: DocumentRecordStatus;
-      notes: string | null;
-      uploadedById: string;
-    } = {
-      shipmentId: shipment.id,
-      docType: parsed.docType,
-      fileName: parsed.fileName.trim(),
-      referenceNumber: normalizeOptional(parsed.referenceNumber),
-      issueDate,
-      version: parsed.version ?? 1,
-      status: parsed.status,
-      notes: normalizeOptional(parsed.notes),
-      uploadedById: ctx.userId,
-    };
 
-    if (parsed.id) {
+    if (parsed.replaceOfId) {
       const existing = await prisma.shipmentDocument.findFirst({
         where: {
-          id: parsed.id,
+          id: parsed.replaceOfId,
           shipment: { companyId: ctx.companyId },
         },
-        select: { id: true },
+        select: { id: true, shipmentId: true, docType: true },
       });
       if (!existing) {
         throw new Error("Document not found");
       }
-      await prisma.shipmentDocument.update({
-        where: { id: existing.id },
-        data: payload,
-      });
-    } else {
-      await prisma.shipmentDocument.create({ data: payload });
+      if (existing.shipmentId !== shipment.id) {
+        throw new Error("Document does not belong to this shipment");
+      }
+      if (existing.docType !== parsed.docType) {
+        throw new Error("Replacement document must keep the same type");
+      }
     }
 
+    const fileMeta = await persistShipmentDocumentFile({ shipmentId: shipment.id, file });
+    const latestVersion = await prisma.shipmentDocument.aggregate({
+      where: {
+        shipmentId: shipment.id,
+        docType: parsed.docType,
+      },
+      _max: { version: true },
+    });
+
+    await prisma.shipmentDocument.create({
+      data: {
+        shipmentId: shipment.id,
+        docType: parsed.docType,
+        fileName: fileMeta.fileName,
+        fileUrl: fileMeta.fileUrl,
+        referenceNumber: normalizeOptional(parsed.referenceNumber),
+        issueDate,
+        version: (latestVersion._max.version ?? 0) + 1,
+        status: parsed.status ?? DocumentRecordStatus.PENDING,
+        notes: normalizeOptional(parsed.notes),
+        uploadedById: ctx.userId,
+      },
+    });
+
+    await runAlertChecksForShipmentUpdate({
+      companyId: ctx.companyId,
+      shipmentId: shipment.id,
+    });
     revalidatePath(`/shipments/${shipment.id}`);
     revalidatePath("/shipments");
     return { success: true };
@@ -1048,6 +1083,20 @@ export async function upsertShipmentDocumentDirectAction(formData: FormData): Pr
   const result = await upsertShipmentDocumentAction({ success: false }, formData);
   if (!result.success) {
     throw new Error(result.error ?? "Unable to save shipment document");
+  }
+}
+
+export async function uploadShipmentDocumentDirectAction(formData: FormData): Promise<void> {
+  const result = await upsertShipmentDocumentAction({ success: false }, formData);
+  if (!result.success) {
+    throw new Error(result.error ?? "Unable to upload shipment document");
+  }
+}
+
+export async function replaceShipmentDocumentDirectAction(formData: FormData): Promise<void> {
+  const result = await upsertShipmentDocumentAction({ success: false }, formData);
+  if (!result.success) {
+    throw new Error(result.error ?? "Unable to replace shipment document");
   }
 }
 
@@ -1077,6 +1126,10 @@ export async function deleteShipmentDocumentAction(
     }
 
     await prisma.shipmentDocument.delete({ where: { id: existing.id } });
+    await runAlertChecksForShipmentUpdate({
+      companyId: ctx.companyId,
+      shipmentId: existing.shipmentId,
+    });
     revalidatePath(`/shipments/${existing.shipmentId}`);
     revalidatePath("/shipments");
     return { success: true };

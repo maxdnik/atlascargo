@@ -13,12 +13,13 @@ import {
   deleteRevenueDirectAction,
   deleteShipmentCostDirectAction,
   deleteShipmentDocumentDirectAction,
+  replaceShipmentDocumentDirectAction,
+  uploadShipmentDocumentDirectAction,
   updateShipmentAction,
   upsertExpenseDirectAction,
   upsertInvoiceDirectAction,
   upsertRevenueDirectAction,
   upsertShipmentCostDirectAction,
-  upsertShipmentDocumentDirectAction,
 } from "@/app/(dashboard)/shipments/actions";
 import { canUser, enforcePagePermission } from "@/lib/permissions";
 import { ShipmentDetailClient } from "@/components/shipments/shipment-detail-client";
@@ -230,6 +231,8 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
           id: doc.id,
           docType: doc.docType,
           fileName: doc.fileName,
+          fileUrl: doc.fileUrl,
+          uploadedAt: doc.uploadedAt.toISOString(),
           referenceNumber: doc.referenceNumber,
           issueDate: doc.issueDate?.toISOString() ?? null,
           version: doc.version,
@@ -317,7 +320,8 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
       actions={{
         updateShipmentAction,
         deleteShipmentDocumentDirectAction,
-        upsertShipmentDocumentDirectAction,
+        uploadShipmentDocumentDirectAction,
+        replaceShipmentDocumentDirectAction,
         deleteRevenueDirectAction,
         upsertRevenueDirectAction,
         deleteExpenseDirectAction,

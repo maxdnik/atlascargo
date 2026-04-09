@@ -118,6 +118,18 @@ export async function getShipmentById(companyId: string, id: string) {
       },
       documents: {
         orderBy: [{ uploadedAt: "desc" }, { createdAt: "desc" }],
+        select: {
+          id: true,
+          docType: true,
+          fileName: true,
+          fileUrl: true,
+          referenceNumber: true,
+          issueDate: true,
+          version: true,
+          status: true,
+          notes: true,
+          uploadedAt: true,
+        },
       },
       revenues: {
         orderBy: [{ createdAt: "desc" }],

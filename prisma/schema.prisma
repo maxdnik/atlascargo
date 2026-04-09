@@ -124,15 +124,12 @@ enum ShipmentPartyRole {
 }
 
 enum DocumentType {
+  BL
+  AWB
   COMMERCIAL_INVOICE
+  SUPPLIER_INVOICE
   PACKING_LIST
-  HBL
-  MBL
-  HAWB
-  MAWB
-  CERTIFICATE
-  PERMIT
-  POD
+  CUSTOMS_DOC
   OTHER
 }
 
@@ -824,6 +821,7 @@ model ShipmentDocument {
   shipmentId      String
   docType         DocumentType
   fileName        String
+  fileUrl         String
   referenceNumber String?
   issueDate       DateTime?
   uploadedById    String?

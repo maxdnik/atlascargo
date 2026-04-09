@@ -42,6 +42,7 @@ type ShipmentSnapshot = {
   deliveredAt: Date | null;
   houseRef: string | null;
   masterRef: string | null;
+  documents: Array<{ docType: string }>;
   shipmentCosts: Array<{ amount: unknown }>;
   invoices: Array<{ status: InvoiceStatus; createdAt: Date; total: unknown }>;
 };
@@ -90,6 +91,11 @@ async function getShipmentSnapshots(where: { companyId?: string; shipmentIds?: s
         houseRef: true,
         masterRef: true,
         customer: { select: { legalName: true } },
+        documents: {
+          select: {
+            docType: true,
+          },
+        },
         shipmentCosts: { select: { amount: true } },
         invoices: {
           select: {
@@ -114,6 +120,7 @@ async function getShipmentSnapshots(where: { companyId?: string; shipmentIds?: s
           deliveredAt: row.deliveredAt,
           houseRef: row.houseRef,
           masterRef: row.masterRef,
+          documents: row.documents,
           shipmentCosts: row.shipmentCosts,
           invoices: row.invoices,
         }),
@@ -166,10 +173,13 @@ function deriveCandidates(now: Date, shipment: ShipmentSnapshot): AlertCandidate
     });
   }
 
-  if (!shipment.houseRef || !shipment.masterRef) {
+  const hasBlOrAwb = shipment.documents.some((doc) => doc.docType === "BL" || doc.docType === "AWB");
+  const hasCommercialInvoice = shipment.documents.some((doc) => doc.docType === "COMMERCIAL_INVOICE");
+
+  if (!hasBlOrAwb || !hasCommercialInvoice) {
     const missingFields = [
-      !shipment.houseRef ? "houseRef" : null,
-      !shipment.masterRef ? "masterRef" : null,
+      !hasBlOrAwb ? "BL/AWB" : null,
+      !hasCommercialInvoice ? "commercial invoice" : null,
     ]
       .filter((item): item is string => Boolean(item))
       .join(" and ");
@@ -177,7 +187,7 @@ function deriveCandidates(now: Date, shipment: ShipmentSnapshot): AlertCandidate
       type: AlertType.MISSING_DOC,
       severity: AlertSeverity.MEDIUM,
       shipmentId: shipment.id,
-      message: `Missing BL/AWB: ${shipment.shipmentNumber} missing ${missingFields}.`,
+      message: `Missing critical docs: ${shipment.shipmentNumber} missing ${missingFields}.`,
     });
   }
 

@@ -24,14 +24,6 @@ import {
 } from "@prisma/client";
 
 import type { ShipmentActionState } from "@/app/(dashboard)/shipments/actions";
-import {
-  cancelFinanceInvoiceAction,
-  createFinanceInvoiceAction,
-  deleteFinanceInvoiceAction,
-  issueFinanceInvoiceAfipAction,
-  markFinanceInvoicePaidAction,
-  updateFinanceInvoiceAction,
-} from "@/app/(dashboard)/finance/actions";
 import { MilestoneTimeline } from "@/components/shipments/milestone-timeline";
 import { ShipmentForm } from "@/components/shipments/shipment-form";
 
@@ -114,6 +106,8 @@ type ShipmentDetailViewModel = {
     id: string;
     docType: string;
     fileName: string;
+    fileUrl: string;
+    uploadedAt: string;
     referenceNumber?: string | null;
     issueDate?: string | null;
     version: number;
@@ -207,7 +201,8 @@ type Props = {
       formData: FormData,
     ) => Promise<ShipmentActionState>;
     deleteShipmentDocumentDirectAction: (formData: FormData) => Promise<void>;
-    upsertShipmentDocumentDirectAction: (formData: FormData) => Promise<void>;
+    uploadShipmentDocumentDirectAction: (formData: FormData) => Promise<void>;
+    replaceShipmentDocumentDirectAction: (formData: FormData) => Promise<void>;
     deleteRevenueDirectAction: (formData: FormData) => Promise<void>;
     upsertRevenueDirectAction: (formData: FormData) => Promise<void>;
     deleteExpenseDirectAction: (formData: FormData) => Promise<void>;
@@ -303,6 +298,43 @@ const docStatusClass: Record<DocumentRecordStatus, string> = {
   VERIFIED: "bg-emerald-100 text-emerald-700",
 };
 
+const documentTypeOptions = [
+  "BL",
+  "AWB",
+  "COMMERCIAL_INVOICE",
+  "SUPPLIER_INVOICE",
+  "PACKING_LIST",
+  "CUSTOMS_DOC",
+  "OTHER",
+] as const;
+
+type ShipmentDocumentType = (typeof documentTypeOptions)[number];
+
+const documentTypeLabel: Record<ShipmentDocumentType, string> = {
+  BL: "BL",
+  AWB: "AWB",
+  COMMERCIAL_INVOICE: "Commercial invoice",
+  SUPPLIER_INVOICE: "Supplier invoice",
+  PACKING_LIST: "Packing list",
+  CUSTOMS_DOC: "Customs document",
+  OTHER: "Other",
+};
+
+function getDocumentTypeLabel(docType: string) {
+  if (docType in documentTypeLabel) {
+    return documentTypeLabel[docType as ShipmentDocumentType];
+  }
+  return docType;
+}
+
+const documentGroupDefinitions: Array<{ key: string; label: string; types: ShipmentDocumentType[] }> = [
+  { key: "bl_awb", label: "BL / AWB", types: ["BL", "AWB"] },
+  { key: "invoices", label: "Invoices", types: ["COMMERCIAL_INVOICE", "SUPPLIER_INVOICE"] },
+  { key: "packing", label: "Packing list", types: ["PACKING_LIST"] },
+  { key: "customs", label: "Customs", types: ["CUSTOMS_DOC"] },
+  { key: "other", label: "Other", types: ["OTHER"] },
+];
+
 const financeStatusClass: Record<FinancialRecordStatus, string> = {
   PENDING: "bg-amber-100 text-amber-800",
   INVOICED: "bg-sky-100 text-sky-700",
@@ -354,9 +386,6 @@ export function ShipmentDetailClient({
     canEditRevenue,
     canDeleteRevenue,
     canViewExpenses,
-    canCreateExpenses,
-    canEditExpenses,
-    canDeleteExpenses,
     canCreateShipmentCosts,
     canEditShipmentCosts,
     canDeleteShipmentCosts,
@@ -368,7 +397,8 @@ export function ShipmentDetailClient({
   const {
     updateShipmentAction,
     deleteShipmentDocumentDirectAction: deleteDocumentAction,
-    upsertShipmentDocumentDirectAction: upsertDocumentAction,
+    uploadShipmentDocumentDirectAction: uploadDocumentAction,
+    replaceShipmentDocumentDirectAction: replaceDocumentAction,
     deleteRevenueDirectAction: deleteRevenueAction,
     upsertRevenueDirectAction: upsertRevenueAction,
     deleteShipmentCostDirectAction: deleteShipmentCostAction,
@@ -412,6 +442,34 @@ export function ShipmentDetailClient({
       isLast: index === shipment.milestones.length - 1,
     }));
   }, [shipment.milestones]);
+  const normalizedDocuments = useMemo(
+    () =>
+      shipment.documents.map((doc) => ({
+        ...doc,
+        docType: doc.docType as ShipmentDocumentType,
+      })),
+    [shipment.documents],
+  );
+  const missingCriticalDocumentLabels = useMemo(() => {
+    const hasBlOrAwb = normalizedDocuments.some((doc) => doc.docType === "BL" || doc.docType === "AWB");
+    const hasCommercialInvoice = normalizedDocuments.some(
+      (doc) => doc.docType === "COMMERCIAL_INVOICE",
+    );
+
+    return [
+      !hasBlOrAwb ? "BL / AWB" : null,
+      !hasCommercialInvoice ? "Commercial invoice" : null,
+    ].filter((label): label is string => Boolean(label));
+  }, [normalizedDocuments]);
+  const groupedDocuments = useMemo(() => {
+    const groups: Record<string, ShipmentDetailViewModel["documents"]> = {};
+    for (const group of documentGroupDefinitions) {
+      groups[group.key] = normalizedDocuments
+        .filter((doc) => group.types.includes(doc.docType))
+        .sort((a, b) => b.version - a.version || b.uploadedAt.localeCompare(a.uploadedAt));
+    }
+    return groups;
+  }, [normalizedDocuments]);
 
   const routeLabel = `${shipment.originCode ?? "-"} → ${shipment.destinationCode ?? "-"}`;
   const shipmentReadyForBilling = shipment.status === ShipmentStatus.CLOSED;
@@ -832,87 +890,176 @@ export function ShipmentDetailClient({
             ) : null}
 
             {activeTab === "documents" && canViewDocuments ? (
-              <div className="space-y-3">
-                {shipment.documents.length === 0 ? (
-                  <Empty label="No documents registered yet." />
+              <div className="space-y-4">
+                {missingCriticalDocumentLabels.length > 0 ? (
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                    <p className="font-semibold">Missing critical docs</p>
+                    <p className="mt-1">This shipment still needs: {missingCriticalDocumentLabels.join(", ")}.</p>
+                  </div>
                 ) : (
-                  shipment.documents.map((doc) => (
-                    <div key={doc.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="space-y-0.5">
-                          <p className="text-sm font-semibold text-slate-900">{doc.fileName}</p>
-                          <p className="text-xs text-slate-600">{doc.docType}</p>
-                        </div>
-                        {statusPill(doc.status, docStatusClass)}
-                      </div>
-                      <div className="mt-2 text-xs text-slate-600">
-                        <p>Ref: {doc.referenceNumber ?? "-"}</p>
-                        <p>Issue: {dateLabel(doc.issueDate)}</p>
-                        <p>Version: {doc.version}</p>
-                      </div>
-                      {canDeleteDocuments ? (
-                        <form action={deleteDocumentAction} className="mt-2">
-                          <input type="hidden" name="id" value={doc.id} />
-                          <button
-                            className="text-xs font-medium text-rose-700 transition hover:underline"
-                            type="submit"
-                          >
-                            Delete
-                          </button>
-                        </form>
-                      ) : null}
-                    </div>
-                  ))
+                  <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
+                    Critical documents are complete.
+                  </div>
                 )}
 
+                <div className="grid gap-3 xl:grid-cols-2">
+                  {documentGroupDefinitions.map((group) => {
+                    const docsInGroup = groupedDocuments[group.key];
+                    return (
+                      <div key={group.key} className="rounded-xl border border-slate-200 bg-slate-50/70 p-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <h4 className="text-sm font-semibold text-slate-900">{group.label}</h4>
+                          <span className="rounded-full bg-slate-200 px-2 py-0.5 text-xs font-medium text-slate-700">
+                            {docsInGroup.length}
+                          </span>
+                        </div>
+                        <div className="mt-3 space-y-2">
+                          {docsInGroup.length === 0 ? (
+                            <p className="text-xs text-slate-500">No documents yet.</p>
+                          ) : (
+                            docsInGroup.map((doc) => (
+                              <div key={doc.id} className="rounded-lg border border-slate-200 bg-white p-2.5">
+                                <div className="flex items-start justify-between gap-2">
+                                  <div>
+                                    <p className="text-sm font-semibold text-slate-900">{doc.fileName}</p>
+                                    <p className="text-xs text-slate-600">
+                                      {getDocumentTypeLabel(doc.docType)} · v{doc.version}
+                                    </p>
+                                  </div>
+                                  {statusPill(doc.status, docStatusClass)}
+                                </div>
+                                <div className="mt-2 text-xs text-slate-600">
+                                  <p>Uploaded: {dateLabel(doc.uploadedAt, true)}</p>
+                                  <p>Issue: {dateLabel(doc.issueDate)}</p>
+                                  <p>Ref: {doc.referenceNumber ?? "-"}</p>
+                                </div>
+                                <div className="mt-2 flex flex-wrap items-center gap-3 text-xs">
+                                  <a
+                                    href={doc.fileUrl}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="font-medium text-sky-700 transition hover:underline"
+                                  >
+                                    View
+                                  </a>
+                                  <a
+                                    href={doc.fileUrl}
+                                    download
+                                    className="font-medium text-sky-700 transition hover:underline"
+                                  >
+                                    Download
+                                  </a>
+                                  {canDeleteDocuments ? (
+                                    <form action={deleteDocumentAction}>
+                                      <input type="hidden" name="id" value={doc.id} />
+                                      <button
+                                        className="font-medium text-rose-700 transition hover:underline"
+                                        type="submit"
+                                      >
+                                        Delete
+                                      </button>
+                                    </form>
+                                  ) : null}
+                                </div>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
                 {canCreateDocuments ? (
-                  <form action={upsertDocumentAction} className="space-y-2 rounded-xl border border-slate-200 p-3">
+                  <form
+                    action={uploadDocumentAction}
+                    className="space-y-2 rounded-xl border border-slate-200 bg-white p-3"
+                  >
                     <input type="hidden" name="shipmentId" value={shipment.id} />
-                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Add document</p>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Upload document</p>
                     <select name="docType" required className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm">
-                      {["COMMERCIAL_INVOICE","PACKING_LIST","HBL","MBL","HAWB","MAWB","CERTIFICATE","PERMIT","POD","OTHER"].map((type) => (
-                        <option key={type} value={type}>{type}</option>
+                      {documentTypeOptions.map((type) => (
+                        <option key={type} value={type}>
+                          {documentTypeLabel[type]}
+                        </option>
                       ))}
                     </select>
-                    <input name="fileName" required placeholder="File name" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
-                    <input name="referenceNumber" placeholder="Reference number" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                    <input type="file" name="file" required className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                    <input
+                      name="referenceNumber"
+                      placeholder="Reference number"
+                      className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                    />
                     <input type="date" name="issueDate" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
-                    <input type="number" min={1} name="version" defaultValue={1} className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
                     <select name="status" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm">
-                      {Object.values(DocumentRecordStatus).map((status) => <option key={status} value={status}>{status}</option>)}
+                      {Object.values(DocumentRecordStatus).map((status) => (
+                        <option key={status} value={status}>
+                          {status}
+                        </option>
+                      ))}
                     </select>
-                    <textarea name="notes" rows={2} placeholder="Internal notes" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
-                    <button type="submit" className="rounded-lg bg-sky-600 px-3 py-2 text-xs font-medium text-white transition hover:bg-sky-500">
-                      Save document
+                    <textarea
+                      name="notes"
+                      rows={2}
+                      placeholder="Internal notes"
+                      className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                    />
+                    <button
+                      type="submit"
+                      className="rounded-lg bg-sky-600 px-3 py-2 text-xs font-medium text-white transition hover:bg-sky-500"
+                    >
+                      Upload
                     </button>
                   </form>
                 ) : null}
 
-                {canEditDocuments && shipment.documents.length > 0 ? (
-                  <form action={upsertDocumentAction} className="space-y-2 rounded-xl border border-slate-200 p-3">
+                {canEditDocuments && normalizedDocuments.length > 0 ? (
+                  <form
+                    action={replaceDocumentAction}
+                    className="space-y-2 rounded-xl border border-slate-200 bg-white p-3"
+                  >
                     <input type="hidden" name="shipmentId" value={shipment.id} />
-                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Edit document</p>
-                    <select name="id" required className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm">
-                      <option value="">Select document</option>
-                      {shipment.documents.map((doc) => (
-                        <option key={doc.id} value={doc.id}>{doc.docType} - {doc.fileName}</option>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Replace document</p>
+                    <select name="replaceOfId" required className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm">
+                      <option value="">Select existing document</option>
+                      {normalizedDocuments.map((doc) => (
+                        <option key={doc.id} value={doc.id}>
+                          {getDocumentTypeLabel(doc.docType)} · v{doc.version} · {doc.fileName}
+                        </option>
                       ))}
                     </select>
                     <select name="docType" required className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm">
-                      {["COMMERCIAL_INVOICE","PACKING_LIST","HBL","MBL","HAWB","MAWB","CERTIFICATE","PERMIT","POD","OTHER"].map((type) => (
-                        <option key={type} value={type}>{type}</option>
+                      {documentTypeOptions.map((type) => (
+                        <option key={type} value={type}>
+                          {documentTypeLabel[type]}
+                        </option>
                       ))}
                     </select>
-                    <input name="fileName" required placeholder="File name" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
-                    <input name="referenceNumber" placeholder="Reference number" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                    <input type="file" name="file" required className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                    <input
+                      name="referenceNumber"
+                      placeholder="Reference number"
+                      className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                    />
                     <input type="date" name="issueDate" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
-                    <input type="number" min={1} name="version" defaultValue={1} className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
                     <select name="status" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm">
-                      {Object.values(DocumentRecordStatus).map((status) => <option key={status} value={status}>{status}</option>)}
+                      {Object.values(DocumentRecordStatus).map((status) => (
+                        <option key={status} value={status}>
+                          {status}
+                        </option>
+                      ))}
                     </select>
-                    <textarea name="notes" rows={2} placeholder="Internal notes" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
-                    <button type="submit" className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-50">
-                      Update document
+                    <textarea
+                      name="notes"
+                      rows={2}
+                      placeholder="Internal notes"
+                      className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                    />
+                    <button
+                      type="submit"
+                      className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
+                    >
+                      Replace (new version)
                     </button>
                   </form>
                 ) : null}
