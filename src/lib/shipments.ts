@@ -129,6 +129,17 @@ export async function getShipmentById(companyId: string, id: string) {
           status: true,
           notes: true,
           uploadedAt: true,
+          parsingResults: {
+            orderBy: [{ createdAt: "desc" }],
+            take: 1,
+            select: {
+              id: true,
+              status: true,
+              parsedJson: true,
+              createdAt: true,
+              documentType: true,
+            },
+          },
         },
       },
       revenues: {

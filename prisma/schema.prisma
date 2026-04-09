@@ -222,6 +222,13 @@ enum AlertStatus {
   RESOLVED
 }
 
+enum DocumentParsingStatus {
+  PENDING
+  PARSED
+  REVIEW_REQUIRED
+  FAILED
+}
+
 enum ActivityAction {
   CREATE
   UPDATE
@@ -834,8 +841,23 @@ model ShipmentDocument {
 
   shipment   Shipment @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
   uploadedBy User?    @relation("DocumentUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+  parsingResults DocumentParsingResult[]
 
   @@index([shipmentId, docType, status])
+}
+
+model DocumentParsingResult {
+  id                 String                @id @default(cuid())
+  shipmentDocumentId String
+  documentType       DocumentType
+  parsedJson         Json?
+  status             DocumentParsingStatus @default(PENDING)
+  createdAt          DateTime              @default(now())
+
+  shipmentDocument ShipmentDocument @relation(fields: [shipmentDocumentId], references: [id], onDelete: Cascade)
+
+  @@index([shipmentDocumentId, createdAt])
+  @@index([status, createdAt])
 }
 
 model Revenue {

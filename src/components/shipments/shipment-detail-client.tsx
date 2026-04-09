@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import {
   DocumentRecordStatus,
+  DocumentParsingStatus,
   FinancialRecordStatus,
   InvoiceLineType,
   InvoiceStatus,
@@ -113,6 +114,12 @@ type ShipmentDetailViewModel = {
     version: number;
     status: DocumentRecordStatus;
     notes?: string | null;
+    parsingResults: Array<{
+      id: string;
+      status: DocumentParsingStatus;
+      createdAt: string;
+      parsedJson: Record<string, unknown> | null;
+    }>;
   }>;
   revenues: Array<{
     id: string;
@@ -170,6 +177,20 @@ type ShipmentDetailViewModel = {
   }>;
 };
 
+type ParsingFieldKey =
+  | "shipperName"
+  | "consigneeName"
+  | "notifyPartyName"
+  | "grossWeightKg"
+  | "packageCount"
+  | "houseRef"
+  | "masterRef"
+  | "originCode"
+  | "destinationCode"
+  | "vesselOrFlight";
+
+type ParsedDocumentPayload = Partial<Record<ParsingFieldKey, string | number | null>>;
+
 type Props = {
   shipment: ShipmentDetailViewModel;
   customers: Array<{ id: string; code: string; legalName: string }>;
@@ -203,6 +224,8 @@ type Props = {
     deleteShipmentDocumentDirectAction: (formData: FormData) => Promise<void>;
     uploadShipmentDocumentDirectAction: (formData: FormData) => Promise<void>;
     replaceShipmentDocumentDirectAction: (formData: FormData) => Promise<void>;
+    triggerDocumentParsingDirectAction: (formData: FormData) => Promise<void>;
+    applyDocumentParsingDirectAction: (formData: FormData) => Promise<void>;
     deleteRevenueDirectAction: (formData: FormData) => Promise<void>;
     upsertRevenueDirectAction: (formData: FormData) => Promise<void>;
     deleteExpenseDirectAction: (formData: FormData) => Promise<void>;
@@ -298,6 +321,13 @@ const docStatusClass: Record<DocumentRecordStatus, string> = {
   VERIFIED: "bg-emerald-100 text-emerald-700",
 };
 
+const parsingStatusClass: Record<DocumentParsingStatus, string> = {
+  PENDING: "bg-amber-100 text-amber-800",
+  PARSED: "bg-emerald-100 text-emerald-700",
+  REVIEW_REQUIRED: "bg-violet-100 text-violet-700",
+  FAILED: "bg-rose-100 text-rose-700",
+};
+
 const documentTypeOptions = [
   "BL",
   "AWB",
@@ -309,6 +339,17 @@ const documentTypeOptions = [
 ] as const;
 
 type ShipmentDocumentType = (typeof documentTypeOptions)[number];
+type ParsedShipmentFieldKey =
+  | "shipperName"
+  | "consigneeName"
+  | "notifyPartyName"
+  | "grossWeightKg"
+  | "packageCount"
+  | "houseRef"
+  | "masterRef"
+  | "originCode"
+  | "destinationCode"
+  | "vesselOrFlight";
 
 const documentTypeLabel: Record<ShipmentDocumentType, string> = {
   BL: "BL",
@@ -325,6 +366,19 @@ function getDocumentTypeLabel(docType: string) {
     return documentTypeLabel[docType as ShipmentDocumentType];
   }
   return docType;
+}
+
+function parseJsonRecord(
+  value: Record<string, unknown> | null | undefined,
+): Record<string, string | number | null> {
+  if (!value) return {};
+  const record: Record<string, string | number | null> = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (typeof item === "string" || typeof item === "number" || item === null) {
+      record[key] = item;
+    }
+  }
+  return record;
 }
 
 const documentGroupDefinitions: Array<{ key: string; label: string; types: ShipmentDocumentType[] }> = [
@@ -399,6 +453,8 @@ export function ShipmentDetailClient({
     deleteShipmentDocumentDirectAction: deleteDocumentAction,
     uploadShipmentDocumentDirectAction: uploadDocumentAction,
     replaceShipmentDocumentDirectAction: replaceDocumentAction,
+    triggerDocumentParsingDirectAction: triggerDocumentParsingAction,
+    applyDocumentParsingDirectAction: applyDocumentParsingAction,
     deleteRevenueDirectAction: deleteRevenueAction,
     upsertRevenueDirectAction: upsertRevenueAction,
     deleteShipmentCostDirectAction: deleteShipmentCostAction,
@@ -429,6 +485,34 @@ export function ShipmentDetailClient({
         return {
           success: false,
           error: error instanceof Error ? error.message : "Unable to create invoice",
+        };
+      }
+    },
+    invoiceInitialState,
+  );
+  const [documentParseState] = useActionState<ShipmentActionState, FormData>(
+    async (_state, formData) => {
+      try {
+        await triggerDocumentParsingAction(formData);
+        return { success: true };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : "Unable to parse document",
+        };
+      }
+    },
+    invoiceInitialState,
+  );
+  const [documentApplyState] = useActionState<ShipmentActionState, FormData>(
+    async (_state, formData) => {
+      try {
+        await applyDocumentParsingAction(formData);
+        return { success: true };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : "Unable to apply parsed data",
         };
       }
     },
@@ -469,6 +553,29 @@ export function ShipmentDetailClient({
         .sort((a, b) => b.version - a.version || b.uploadedAt.localeCompare(a.uploadedAt));
     }
     return groups;
+  }, [normalizedDocuments]);
+  const latestParsingByDocumentId = useMemo(() => {
+    const map = new Map<string, ParsingViewModel>();
+    for (const doc of normalizedDocuments) {
+      const latest = [...doc.parsingResults].sort(
+        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+      )[0];
+      if (!latest) continue;
+      const parsedJson = latest.parsedJson ?? null;
+      const conflictFields = Array.isArray((parsedJson as { conflicts?: unknown } | null)?.conflicts)
+        ? (((parsedJson as { conflicts?: Array<{ field?: unknown }> }).conflicts ?? [])
+            .map((entry) => String(entry.field ?? "").trim())
+            .filter(Boolean) as Array<keyof ParsedShipmentFields>)
+        : [];
+      map.set(doc.id, {
+        id: latest.id,
+        status: latest.status,
+        createdAt: latest.createdAt,
+        parsedJson,
+        conflictFields,
+      });
+    }
+    return map;
   }, [normalizedDocuments]);
 
   const routeLabel = `${shipment.originCode ?? "-"} → ${shipment.destinationCode ?? "-"}`;
@@ -917,58 +1024,130 @@ export function ShipmentDetailClient({
                           {docsInGroup.length === 0 ? (
                             <p className="text-xs text-slate-500">No documents yet.</p>
                           ) : (
-                            docsInGroup.map((doc) => (
-                              <div key={doc.id} className="rounded-lg border border-slate-200 bg-white p-2.5">
-                                <div className="flex items-start justify-between gap-2">
-                                  <div>
-                                    <p className="text-sm font-semibold text-slate-900">{doc.fileName}</p>
-                                    <p className="text-xs text-slate-600">
-                                      {getDocumentTypeLabel(doc.docType)} · v{doc.version}
-                                    </p>
+                            docsInGroup.map((doc) => {
+                              const latestParsing = latestParsingByDocumentId.get(doc.id);
+                              return (
+                                <div key={doc.id} className="rounded-lg border border-slate-200 bg-white p-2.5">
+                                  <div className="flex items-start justify-between gap-2">
+                                    <div>
+                                      <p className="text-sm font-semibold text-slate-900">{doc.fileName}</p>
+                                      <p className="text-xs text-slate-600">
+                                        {getDocumentTypeLabel(doc.docType)} · v{doc.version}
+                                      </p>
+                                    </div>
+                                    {statusPill(doc.status, docStatusClass)}
                                   </div>
-                                  {statusPill(doc.status, docStatusClass)}
-                                </div>
-                                <div className="mt-2 text-xs text-slate-600">
-                                  <p>Uploaded: {dateLabel(doc.uploadedAt, true)}</p>
-                                  <p>Issue: {dateLabel(doc.issueDate)}</p>
-                                  <p>Ref: {doc.referenceNumber ?? "-"}</p>
-                                </div>
-                                <div className="mt-2 flex flex-wrap items-center gap-3 text-xs">
-                                  <a
-                                    href={doc.fileUrl}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    className="font-medium text-sky-700 transition hover:underline"
-                                  >
-                                    View
-                                  </a>
-                                  <a
-                                    href={doc.fileUrl}
-                                    download
-                                    className="font-medium text-sky-700 transition hover:underline"
-                                  >
-                                    Download
-                                  </a>
-                                  {canDeleteDocuments ? (
-                                    <form action={deleteDocumentAction}>
-                                      <input type="hidden" name="id" value={doc.id} />
+                                  <div className="mt-2 text-xs text-slate-600">
+                                    <p>Uploaded: {dateLabel(doc.uploadedAt, true)}</p>
+                                    <p>Issue: {dateLabel(doc.issueDate)}</p>
+                                    <p>Ref: {doc.referenceNumber ?? "-"}</p>
+                                  </div>
+                                  {latestParsing ? (
+                                    <div
+                                      className={`mt-2 rounded-md border px-2 py-1 text-xs ${parsingStatusClass[latestParsing.status]}`}
+                                    >
+                                      Parse: {latestParsing.status} · {dateLabel(latestParsing.createdAt, true)}
+                                    </div>
+                                  ) : (
+                                    <p className="mt-2 text-xs text-slate-500">Parse: Not parsed yet.</p>
+                                  )}
+                                  {latestParsing?.parsedJson ? (
+                                    <div className="mt-2 rounded-md border border-slate-200 bg-slate-50 px-2 py-2 text-xs">
+                                      <p className="font-semibold text-slate-700">Parsed fields preview</p>
+                                      <p className="mt-1 text-slate-600">
+                                        {Object.entries(latestParsing.parsedJson)
+                                          .filter(([, value]) => value !== null && value !== "")
+                                          .slice(0, 4)
+                                          .map(([key, value]) => `${key}: ${String(value)}`)
+                                          .join(" · ") || "No extracted values."}
+                                      </p>
+                                    </div>
+                                  ) : null}
+                                  <div className="mt-2 flex flex-wrap items-center gap-3 text-xs">
+                                    <a
+                                      href={doc.fileUrl}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="font-medium text-sky-700 transition hover:underline"
+                                    >
+                                      View
+                                    </a>
+                                    <a
+                                      href={doc.fileUrl}
+                                      download
+                                      className="font-medium text-sky-700 transition hover:underline"
+                                    >
+                                      Download
+                                    </a>
+                                    <form action={triggerDocumentParsingAction}>
+                                      <input type="hidden" name="shipmentId" value={shipment.id} />
+                                      <input type="hidden" name="shipmentDocumentId" value={doc.id} />
                                       <button
-                                        className="font-medium text-rose-700 transition hover:underline"
                                         type="submit"
+                                        className="font-medium text-indigo-700 transition hover:underline"
                                       >
-                                        Delete
+                                        Parse document
                                       </button>
                                     </form>
+                                    {latestParsing ? (
+                                      <form action={applyDocumentParsingAction}>
+                                        <input type="hidden" name="shipmentId" value={shipment.id} />
+                                        <input type="hidden" name="parsingResultId" value={latestParsing.id} />
+                                        <input
+                                          type="hidden"
+                                          name="strategy"
+                                          value={latestParsing.status === "REVIEW_REQUIRED" ? "OVERRIDE_CONFLICTS" : "ONLY_EMPTY"}
+                                        />
+                                        {latestParsing.status === "REVIEW_REQUIRED" && latestParsing.conflictFields.length > 0 ? (
+                                          <input
+                                            type="hidden"
+                                            name="overrideFields"
+                                            value={latestParsing.conflictFields.join(",")}
+                                          />
+                                        ) : null}
+                                        <button
+                                          type="submit"
+                                          className="font-medium text-emerald-700 transition hover:underline"
+                                        >
+                                          Apply to shipment
+                                        </button>
+                                      </form>
+                                    ) : null}
+                                    {canDeleteDocuments ? (
+                                      <form action={deleteDocumentAction}>
+                                        <input type="hidden" name="id" value={doc.id} />
+                                        <button
+                                          className="font-medium text-rose-700 transition hover:underline"
+                                          type="submit"
+                                        >
+                                          Delete
+                                        </button>
+                                      </form>
+                                    ) : null}
+                                  </div>
+                                  {latestParsing?.status === "REVIEW_REQUIRED" &&
+                                  latestParsing.conflictFields.length > 0 ? (
+                                    <p className="mt-2 text-xs text-amber-700">
+                                      Conflict review required for fields: {latestParsing.conflictFields.join(", ")}.
+                                      Applying will only override these fields.
+                                    </p>
                                   ) : null}
                                 </div>
-                              </div>
-                            ))
+                              );
+                            })
                           )}
                         </div>
                       </div>
                     );
                   })}
                 </div>
+
+                {(documentParseState.error && !documentParseState.success) ||
+                (documentApplyState.error && !documentApplyState.success) ? (
+                  <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-800">
+                    {documentParseState.error ?? documentApplyState.error}
+                  </div>
+                ) : null}
 
                 {canCreateDocuments ? (
                   <form

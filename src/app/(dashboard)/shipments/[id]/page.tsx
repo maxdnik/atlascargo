@@ -4,6 +4,7 @@ import { PermissionAction, PermissionResource } from "@prisma/client";
 import { getShipmentById } from "@/lib/shipments";
 import { listCustomers } from "@/lib/customers";
 import {
+  applyDocumentParsingDirectAction,
   createInvoiceDirectAction,
   issueInvoiceAFIPDirectAction,
   markInvoicePaidDirectAction,
@@ -14,6 +15,7 @@ import {
   deleteShipmentCostDirectAction,
   deleteShipmentDocumentDirectAction,
   replaceShipmentDocumentDirectAction,
+  triggerDocumentParsingDirectAction,
   uploadShipmentDocumentDirectAction,
   updateShipmentAction,
   upsertExpenseDirectAction,
@@ -238,6 +240,12 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
           version: doc.version,
           status: doc.status,
           notes: doc.notes,
+          parsingResults: doc.parsingResults.map((result) => ({
+            id: result.id,
+            status: result.status,
+            createdAt: result.createdAt.toISOString(),
+            parsedJson: result.parsedJson,
+          })),
         })),
         revenues: shipment.revenues.map((row) => ({
           id: row.id,
@@ -320,6 +328,8 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
       actions={{
         updateShipmentAction,
         deleteShipmentDocumentDirectAction,
+        triggerDocumentParsingDirectAction,
+        applyDocumentParsingDirectAction,
         uploadShipmentDocumentDirectAction,
         replaceShipmentDocumentDirectAction,
         deleteRevenueDirectAction,
