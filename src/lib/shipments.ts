@@ -125,6 +125,9 @@ export async function getShipmentById(companyId: string, id: string) {
       expenses: {
         orderBy: [{ createdAt: "desc" }],
       },
+      shipmentCosts: {
+        orderBy: [{ createdAt: "desc" }],
+      },
       invoices: {
         orderBy: [{ createdAt: "desc" }],
         include: {
@@ -139,6 +142,7 @@ export async function getShipmentById(companyId: string, id: string) {
           documents: true,
           revenues: true,
           expenses: true,
+          shipmentCosts: true,
           invoices: true,
         },
       },

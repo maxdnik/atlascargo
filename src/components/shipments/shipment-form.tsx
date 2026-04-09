@@ -8,7 +8,6 @@ import type { ShipmentActionState } from "@/app/(dashboard)/shipments/actions";
 
 type ShipmentDefaults = {
   id?: string;
-  shipmentNumber?: string;
   customerId?: string;
   quoteId?: string;
   quoteNumber?: string;
@@ -66,7 +65,7 @@ type ShipmentFormProps = {
 
 const initialState: ShipmentActionState = { success: false };
 
-const modeOptions: TransportMode[] = ["AIR", "OCEAN", "ROAD"];
+const modeOptions: TransportMode[] = ["AIR", "OCEAN", "ROAD", "COURIER"];
 const directionOptions: TradeDirection[] = ["IMPORT", "EXPORT"];
 const statusOptions: ShipmentStatus[] = [
   "DRAFT",
@@ -115,14 +114,13 @@ export function ShipmentForm({ action, defaults, customers, submitLabel }: Shipm
       <section className="space-y-3">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-700">Core</h2>
         <div className="grid gap-4 md:grid-cols-3">
-          <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">Shipment # *</label>
-            <input
-              name="shipmentNumber"
-              required
-              defaultValue={defaults?.shipmentNumber ?? ""}
-              className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm uppercase"
-            />
+          <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Shipment #</p>
+            <p className="mt-1 font-medium text-slate-800">
+              {defaults?.id
+                ? "Generated on creation (immutable)"
+                : "Auto-generated from mode + direction"}
+            </p>
           </div>
           <div>
             <label className="mb-1 block text-sm font-medium text-slate-700">Customer *</label>

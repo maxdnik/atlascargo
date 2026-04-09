@@ -7,7 +7,10 @@ import {
   DocumentRecordStatus,
   FinancialRecordStatus,
   MilestoneStatus,
+  Prisma,
   QuoteStatus,
+  ShipmentCostCategory,
+  ShipmentCostStatus,
   ShipmentStatus,
   TradeDirection,
   TransportMode,
@@ -25,7 +28,7 @@ import {
   updateInvoiceHeader,
 } from "@/lib/invoices";
 
-const TRANSPORT_MODES = ["AIR", "OCEAN", "ROAD"] as const;
+const TRANSPORT_MODES = ["AIR", "OCEAN", "ROAD", "COURIER"] as const;
 const TRADE_DIRECTIONS = ["IMPORT", "EXPORT"] as const;
 const SHIPMENT_STATUSES = [
   "DRAFT",
@@ -41,7 +44,6 @@ const SHIPMENT_STATUSES = [
 
 const shipmentSchema = z.object({
   id: z.string().optional(),
-  shipmentNumber: z.string().min(3).max(40),
   customerId: z.string().min(1),
   quoteId: z.string().optional(),
   mode: z.enum(TRANSPORT_MODES),
@@ -287,6 +289,64 @@ function validateOperationalStatusRules(
   }
 }
 
+function resolveShipmentPrefix(mode: TransportMode, direction: TradeDirection) {
+  const normalizedDirection = direction === TradeDirection.IMPORT ? "IMPORT" : "EXPORT";
+  if (mode === TransportMode.AIR) {
+    return normalizedDirection === "IMPORT" ? "CAI" : "CAE";
+  }
+  if (mode === TransportMode.OCEAN) {
+    return normalizedDirection === "IMPORT" ? "CMI" : "CME";
+  }
+  if (mode === TransportMode.ROAD) {
+    return normalizedDirection === "IMPORT" ? "TTI" : "TTE";
+  }
+  if (mode === TransportMode.COURIER) {
+    return normalizedDirection === "IMPORT" ? "COI" : "COE";
+  }
+  throw new Error("Shipment numbering is only available for AIR, OCEAN, ROAD or COURIER");
+}
+
+async function nextShipmentNumber(
+  tx: Prisma.TransactionClient,
+  companyId: string,
+  mode: TransportMode,
+  direction: TradeDirection,
+) {
+  const prefix = resolveShipmentPrefix(mode, direction);
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const counter = await tx.shipmentNumberCounter.upsert({
+      where: {
+        companyId_prefix: {
+          companyId,
+          prefix,
+        },
+      },
+      create: {
+        companyId,
+        prefix,
+        nextValue: 2,
+      },
+      update: {
+        nextValue: { increment: 1 },
+      },
+      select: { nextValue: true },
+    });
+    const sequence = counter.nextValue - 1;
+    const candidate = `${prefix}${String(sequence).padStart(3, "0")}`;
+    const exists = await tx.shipment.findFirst({
+      where: {
+        companyId,
+        shipmentNumber: candidate,
+      },
+      select: { id: true },
+    });
+    if (!exists) {
+      return candidate;
+    }
+  }
+  throw new Error("Unable to generate a unique shipment number");
+}
+
 async function getContext(
   resource: "SHIPMENTS" | "MILESTONES" = "SHIPMENTS",
   action: "CREATE" | "EDIT" | "DELETE" = "EDIT",
@@ -305,7 +365,6 @@ export async function createShipmentAction(
     const ctx = await getContext("SHIPMENTS", "CREATE");
 
     const parsed = shipmentSchema.parse({
-      shipmentNumber: formData.get("shipmentNumber"),
       customerId: formData.get("customerId"),
       quoteId: formData.get("quoteId") || undefined,
       mode: formData.get("mode"),
@@ -451,12 +510,18 @@ export async function createShipmentAction(
     );
 
     const created = await prisma.$transaction(async (tx) => {
+      const generatedShipmentNumber = await nextShipmentNumber(
+        tx,
+        ctx.companyId,
+        parsed.mode,
+        parsed.direction,
+      );
       const shipment = await tx.shipment.create({
         data: {
           companyId: ctx.companyId,
           branchId: ctx.branchId ?? undefined,
           ownerUserId: ctx.userId,
-          shipmentNumber: parsed.shipmentNumber.toUpperCase(),
+          shipmentNumber: generatedShipmentNumber,
           customerId: parsed.customerId,
           quoteId: approvedQuote?.id,
           mode: parsed.mode,
@@ -560,7 +625,6 @@ export async function updateShipmentAction(
 
     const parsed = shipmentSchema.parse({
       id,
-      shipmentNumber: formData.get("shipmentNumber"),
       customerId: formData.get("customerId"),
       quoteId: formData.get("quoteId") || undefined,
       mode: formData.get("mode"),
@@ -664,7 +728,6 @@ export async function updateShipmentAction(
       const shipment = await tx.shipment.update({
         where: { id: before.id },
         data: {
-          shipmentNumber: parsed.shipmentNumber.toUpperCase(),
           customerId: parsed.customerId,
           mode: parsed.mode,
           direction: parsed.direction,
@@ -811,6 +874,19 @@ const expenseSchema = z.object({
   exchangeRate: z.coerce.number().positive().max(100_000).optional(),
   dueDate: z.string().optional(),
   status: z.nativeEnum(FinancialRecordStatus),
+  notes: z.string().max(600).optional(),
+});
+
+const shipmentCostSchema = z.object({
+  id: z.string().optional(),
+  shipmentId: z.string().min(1),
+  supplierName: z.string().min(2).max(180),
+  conceptCategory: z.nativeEnum(ShipmentCostCategory),
+  customConcept: z.string().max(160).optional(),
+  amount: z.coerce.number().positive().max(100_000_000),
+  currencyCode: z.enum(["USD", "EUR", "ARS"]),
+  dueDate: z.string().optional(),
+  status: z.nativeEnum(ShipmentCostStatus),
   notes: z.string().max(600).optional(),
 });
 
@@ -1240,6 +1316,130 @@ export async function deleteExpenseDirectAction(formData: FormData): Promise<voi
   }
 }
 
+export async function upsertShipmentCostAction(
+  _prevState: ShipmentActionState,
+  formData: FormData,
+): Promise<ShipmentActionState> {
+  try {
+    const ctx = await getContext("SHIPMENTS", "EDIT");
+    const parsed = shipmentCostSchema.parse({
+      id: formData.get("id") || undefined,
+      shipmentId: formData.get("shipmentId"),
+      supplierName: formData.get("supplierName"),
+      conceptCategory: formData.get("conceptCategory"),
+      customConcept: formData.get("customConcept") || undefined,
+      amount: formData.get("amount"),
+      currencyCode: formData.get("currencyCode"),
+      dueDate: String(formData.get("dueDate") || ""),
+      status: formData.get("status"),
+      notes: formData.get("notes") || undefined,
+    });
+
+    if (parsed.conceptCategory === ShipmentCostCategory.OTHER && !parsed.customConcept?.trim()) {
+      throw new Error("Custom concept is required when category is OTHER");
+    }
+
+    const shipment = await assertShipmentAccess(ctx.companyId, parsed.shipmentId);
+    const dueDate = toDate(parsed.dueDate);
+    const payload = {
+      companyId: ctx.companyId,
+      branchId: ctx.branchId ?? undefined,
+      shipmentId: shipment.id,
+      supplierName: parsed.supplierName.trim(),
+      conceptCategory: parsed.conceptCategory,
+      customConcept: normalizeOptional(parsed.customConcept),
+      amount: parsed.amount,
+      currencyCode: parsed.currencyCode,
+      dueDate,
+      status: parsed.status,
+      notes: normalizeOptional(parsed.notes),
+    };
+
+    if (parsed.id) {
+      const existing = await prisma.shipmentCost.findFirst({
+        where: {
+          id: parsed.id,
+          companyId: ctx.companyId,
+        },
+        select: { id: true },
+      });
+      if (!existing) {
+        throw new Error("Shipment cost record not found");
+      }
+      await prisma.shipmentCost.update({
+        where: { id: existing.id },
+        data: payload,
+      });
+    } else {
+      await prisma.shipmentCost.create({ data: payload });
+    }
+
+    revalidatePath(`/shipments/${shipment.id}`);
+    revalidatePath("/shipments");
+    revalidatePath("/finance");
+    revalidatePath("/finance/profitability");
+    revalidatePath("/finance/forecast");
+    revalidatePath("/finance/ap");
+    return { success: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return { success: false, error: message };
+  }
+}
+
+export async function upsertShipmentCostDirectAction(formData: FormData): Promise<void> {
+  const result = await upsertShipmentCostAction({ success: false }, formData);
+  if (!result.success) {
+    throw new Error(result.error ?? "Unable to save shipment cost");
+  }
+}
+
+export async function deleteShipmentCostAction(
+  _prevState: ShipmentActionState,
+  formData: FormData,
+): Promise<ShipmentActionState> {
+  try {
+    const ctx = await getContext("SHIPMENTS", "EDIT");
+    const id = String(formData.get("id") ?? "").trim();
+    if (!id) {
+      throw new Error("Shipment cost id is required");
+    }
+
+    const existing = await prisma.shipmentCost.findFirst({
+      where: {
+        id,
+        companyId: ctx.companyId,
+      },
+      select: {
+        id: true,
+        shipmentId: true,
+      },
+    });
+    if (!existing) {
+      throw new Error("Shipment cost record not found");
+    }
+
+    await prisma.shipmentCost.delete({ where: { id: existing.id } });
+    revalidatePath(`/shipments/${existing.shipmentId}`);
+    revalidatePath("/shipments");
+    revalidatePath("/finance");
+    revalidatePath("/finance/profitability");
+    revalidatePath("/finance/forecast");
+    revalidatePath("/finance/ap");
+    return { success: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return { success: false, error: message };
+  }
+}
+
+export async function deleteShipmentCostDirectAction(formData: FormData): Promise<void> {
+  const result = await deleteShipmentCostAction({ success: false }, formData);
+  if (!result.success) {
+    throw new Error(result.error ?? "Unable to delete shipment cost");
+  }
+}
+
 export async function createInvoiceAction(
   _prevState: ShipmentActionState,
   formData: FormData,
@@ -1565,7 +1765,6 @@ export async function upsertMilestoneAction(
 
 const quoteConvertSchema = z.object({
   quoteId: z.string().min(1),
-  shipmentNumber: z.string().min(3).max(40),
 });
 
 export async function createShipmentFromQuoteAction(
@@ -1576,7 +1775,6 @@ export async function createShipmentFromQuoteAction(
     const ctx = await getContext("SHIPMENTS", "CREATE");
     const parsed = quoteConvertSchema.parse({
       quoteId: formData.get("quoteId"),
-      shipmentNumber: formData.get("shipmentNumber"),
     });
 
     const quote = await prisma.quote.findFirst({
@@ -1616,12 +1814,13 @@ export async function createShipmentFromQuoteAction(
     }
 
     const created = await prisma.$transaction(async (tx) => {
+      const shipmentNumber = await nextShipmentNumber(tx, ctx.companyId, quote.mode, quote.direction);
       const shipment = await tx.shipment.create({
         data: {
           companyId: ctx.companyId,
           branchId: ctx.branchId ?? undefined,
           ownerUserId: ctx.userId,
-          shipmentNumber: parsed.shipmentNumber.toUpperCase(),
+          shipmentNumber,
           quoteId: quote.id,
           customerId: quote.customerId,
           mode: quote.mode,

@@ -18,6 +18,8 @@ import {
   InvoiceLineType,
   InvoiceStatus,
   MilestoneStatus,
+  ShipmentCostCategory,
+  ShipmentCostStatus,
   ShipmentStatus,
 } from "@prisma/client";
 
@@ -89,10 +91,13 @@ type ShipmentDetailViewModel = {
     quotedMarginPct: number | null;
   };
   actualFinancials: {
-    totalRevenue: number;
-    totalExpense: number;
+    invoicedRevenue: number;
+    totalShipmentCost: number;
     grossProfit: number;
     marginPct: number | null;
+    varianceMarginPct: number | null;
+    hasRevenue: boolean;
+    hasCosts: boolean;
     hasFinancials: boolean;
     marginDeteriorated: boolean;
   };
@@ -138,6 +143,17 @@ type ShipmentDetailViewModel = {
     status: FinancialRecordStatus;
     notes?: string | null;
   }>;
+  shipmentCosts: Array<{
+    id: string;
+    supplierName: string;
+    conceptCategory: ShipmentCostCategory;
+    customConcept?: string | null;
+    amount: number;
+    currencyCode: string;
+    dueDate?: string | null;
+    status: ShipmentCostStatus;
+    notes?: string | null;
+  }>;
   invoices: Array<{
     id: string;
     invoiceNumber: string;
@@ -177,6 +193,9 @@ type Props = {
     canCreateExpenses: boolean;
     canEditExpenses: boolean;
     canDeleteExpenses: boolean;
+    canCreateShipmentCosts: boolean;
+    canEditShipmentCosts: boolean;
+    canDeleteShipmentCosts: boolean;
     canViewFinancialSummary: boolean;
     canCreateInvoices: boolean;
     canEditInvoices: boolean;
@@ -193,6 +212,8 @@ type Props = {
     upsertRevenueDirectAction: (formData: FormData) => Promise<void>;
     deleteExpenseDirectAction: (formData: FormData) => Promise<void>;
     upsertExpenseDirectAction: (formData: FormData) => Promise<void>;
+    deleteShipmentCostDirectAction: (formData: FormData) => Promise<void>;
+    upsertShipmentCostDirectAction: (formData: FormData) => Promise<void>;
     createInvoiceDirectAction: (formData: FormData) => Promise<void>;
     upsertInvoiceDirectAction: (formData: FormData) => Promise<void>;
     issueInvoiceAFIPDirectAction: (formData: FormData) => Promise<void>;
@@ -288,6 +309,12 @@ const financeStatusClass: Record<FinancialRecordStatus, string> = {
   PAID: "bg-emerald-100 text-emerald-700",
 };
 
+const shipmentCostStatusClass: Record<ShipmentCostStatus, string> = {
+  PENDING: "bg-amber-100 text-amber-800",
+  CONFIRMED: "bg-sky-100 text-sky-700",
+  PAID: "bg-emerald-100 text-emerald-700",
+};
+
 const invoiceInitialState: ShipmentActionState = { success: false };
 
 function Card({ title, subtitle, children }: { title: string; subtitle?: string; children: React.ReactNode }) {
@@ -330,6 +357,9 @@ export function ShipmentDetailClient({
     canCreateExpenses,
     canEditExpenses,
     canDeleteExpenses,
+    canCreateShipmentCosts,
+    canEditShipmentCosts,
+    canDeleteShipmentCosts,
     canViewFinancialSummary,
     canCreateInvoices,
     canEditInvoices,
@@ -341,8 +371,8 @@ export function ShipmentDetailClient({
     upsertShipmentDocumentDirectAction: upsertDocumentAction,
     deleteRevenueDirectAction: deleteRevenueAction,
     upsertRevenueDirectAction: upsertRevenueAction,
-    deleteExpenseDirectAction: deleteExpenseAction,
-    upsertExpenseDirectAction: upsertExpenseAction,
+    deleteShipmentCostDirectAction: deleteShipmentCostAction,
+    upsertShipmentCostDirectAction: upsertShipmentCostAction,
     createInvoiceDirectAction: createInvoiceAction,
     upsertInvoiceDirectAction: upsertInvoiceAction,
     issueInvoiceAFIPDirectAction: issueInvoiceAFIPAction,
@@ -350,14 +380,14 @@ export function ShipmentDetailClient({
     cancelInvoiceDirectAction: cancelInvoiceAction,
     deleteInvoiceDirectAction: deleteInvoiceAction,
   } = actions;
-  const defaultTab: "documents" | "revenue" | "expenses" | "invoices" = canViewDocuments
+  const defaultTab: "documents" | "revenue" | "costs" | "invoices" = canViewDocuments
     ? "documents"
     : canViewRevenue
       ? "revenue"
       : canViewExpenses
-        ? "expenses"
+        ? "costs"
         : "invoices";
-  const [activeTab, setActiveTab] = useState<"documents" | "revenue" | "expenses" | "invoices">(
+  const [activeTab, setActiveTab] = useState<"documents" | "revenue" | "costs" | "invoices">(
     defaultTab,
   );
   const [invoiceCreateState] = useActionState<ShipmentActionState, FormData>(
@@ -595,8 +625,18 @@ export function ShipmentDetailClient({
 
                 <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
                   <p className="text-xs uppercase tracking-wide text-slate-500">Actual</p>
-                  <p className="mt-1">Revenue: <span className="font-semibold text-slate-900">{money(shipment.actualFinancials.totalRevenue)}</span></p>
-                  <p>Expense: <span className="font-semibold text-slate-900">{money(shipment.actualFinancials.totalExpense)}</span></p>
+                  <p className="mt-1">
+                    Invoiced revenue:{" "}
+                    <span className="font-semibold text-slate-900">
+                      {money(shipment.actualFinancials.invoicedRevenue)}
+                    </span>
+                  </p>
+                  <p>
+                    Total shipment cost:{" "}
+                    <span className="font-semibold text-slate-900">
+                      {money(shipment.actualFinancials.totalShipmentCost)}
+                    </span>
+                  </p>
                   <p>
                     Gross Profit:{" "}
                     <span
@@ -612,9 +652,20 @@ export function ShipmentDetailClient({
                   </p>
                 </div>
 
+                {shipment.actualFinancials.varianceMarginPct !== null ? (
+                  <p
+                    className={`rounded-xl border px-3 py-2 text-xs ${
+                      shipment.actualFinancials.varianceMarginPct < 0
+                        ? "border-rose-200 bg-rose-50 text-rose-700"
+                        : "border-emerald-200 bg-emerald-50 text-emerald-700"
+                    }`}
+                  >
+                    Margin variance vs quoted: {shipment.actualFinancials.varianceMarginPct.toFixed(2)} pts
+                  </p>
+                ) : null}
                 {!shipment.actualFinancials.hasFinancials ? (
                   <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                    Incomplete financials: add revenue and expense records.
+                    Incomplete profitability: add shipment costs and invoices.
                   </p>
                 ) : null}
                 {shipment.actualFinancials.marginDeteriorated ? (
@@ -655,12 +706,12 @@ export function ShipmentDetailClient({
               {canViewExpenses ? (
                 <button
                   type="button"
-                  onClick={() => setActiveTab("expenses")}
+                  onClick={() => setActiveTab("costs")}
                   className={`rounded-lg px-3 py-1.5 text-xs font-medium ${
-                    activeTab === "expenses" ? "bg-sky-600 text-white" : "border border-slate-200 text-slate-600"
+                    activeTab === "costs" ? "bg-sky-600 text-white" : "border border-slate-200 text-slate-600"
                   }`}
                 >
-                  Expenses
+                  Costs
                 </button>
               ) : null}
               {canCreateInvoices || canEditInvoices || canDeleteInvoices ? (
@@ -957,25 +1008,31 @@ export function ShipmentDetailClient({
               </div>
             ) : null}
 
-            {activeTab === "expenses" && canViewExpenses ? (
+            {activeTab === "costs" && canViewExpenses ? (
               <div className="space-y-3">
-                {shipment.expenses.length === 0 ? (
-                  <Empty label="No expense records yet." />
+                {shipment.shipmentCosts.length === 0 ? (
+                  <Empty label="No shipment costs registered yet." />
                 ) : (
-                  shipment.expenses.map((row) => (
+                  shipment.shipmentCosts.map((row) => (
                     <div key={row.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
                       <div className="flex items-start justify-between gap-2">
                         <div>
                           <p className="text-sm font-semibold text-slate-900">{row.supplierName}</p>
                           <p className="text-xs text-slate-600">
-                            {row.concept} · {row.amount.toFixed(2)} {row.currencyCode} · Base {row.amountBase.toFixed(2)}
+                            {row.conceptCategory}
+                            {row.customConcept ? ` · ${row.customConcept}` : ""} · {row.amount.toFixed(2)}{" "}
+                            {row.currencyCode}
                           </p>
                         </div>
-                        {statusPill(row.status, financeStatusClass)}
+                        <span
+                          className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${shipmentCostStatusClass[row.status]}`}
+                        >
+                          {row.status}
+                        </span>
                       </div>
                       <p className="mt-2 text-xs text-slate-600">Due: {dateLabel(row.dueDate)}</p>
-                      {canDeleteExpenses ? (
-                        <form action={deleteExpenseAction} className="mt-2">
+                      {canDeleteShipmentCosts ? (
+                        <form action={deleteShipmentCostAction} className="mt-2">
                           <input type="hidden" name="id" value={row.id} />
                           <button className="text-xs font-medium text-rose-700 transition hover:underline" type="submit">
                             Delete
@@ -986,12 +1043,29 @@ export function ShipmentDetailClient({
                   ))
                 )}
 
-                {canCreateExpenses ? (
-                  <form action={upsertExpenseAction} className="space-y-2 rounded-xl border border-slate-200 p-3">
+                {canCreateShipmentCosts ? (
+                  <form action={upsertShipmentCostAction} className="space-y-2 rounded-xl border border-slate-200 p-3">
                     <input type="hidden" name="shipmentId" value={shipment.id} />
-                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Add expense</p>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Add shipment cost
+                    </p>
                     <input name="supplierName" required placeholder="Supplier name" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
-                    <input name="concept" required placeholder="Concept" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                    <select
+                      name="conceptCategory"
+                      defaultValue="OCEAN_FREIGHT"
+                      className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                    >
+                      {Object.values(ShipmentCostCategory).map((category) => (
+                        <option key={category} value={category}>
+                          {category}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      name="customConcept"
+                      placeholder="Custom concept (required if category is OTHER)"
+                      className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                    />
                     <div className="grid grid-cols-3 gap-2">
                       <input type="number" step="0.01" min={0} name="amount" required placeholder="Amount" className="rounded-lg border border-slate-200 px-3 py-2 text-sm" />
                       <select name="currencyCode" className="rounded-lg border border-slate-200 px-3 py-2 text-sm">
@@ -999,33 +1073,56 @@ export function ShipmentDetailClient({
                         <option value="EUR">EUR</option>
                         <option value="ARS">ARS</option>
                       </select>
-                      <input type="number" step="0.0001" min={0} name="exchangeRate" placeholder="Rate" className="rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                      <select
+                        name="status"
+                        className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                      >
+                        {Object.values(ShipmentCostStatus).map((status) => (
+                          <option key={status} value={status}>
+                            {status}
+                          </option>
+                        ))}
+                      </select>
                     </div>
                     <input type="date" name="dueDate" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
-                    <select name="status" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm">
-                      {Object.values(FinancialRecordStatus).map((status) => <option key={status} value={status}>{status}</option>)}
-                    </select>
                     <textarea name="notes" rows={2} placeholder="Notes" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
                     <button type="submit" className="rounded-lg bg-sky-600 px-3 py-2 text-xs font-medium text-white transition hover:bg-sky-500">
-                      Save expense
+                      Save cost
                     </button>
                   </form>
                 ) : null}
 
-                {canEditExpenses && shipment.expenses.length > 0 ? (
-                  <form action={upsertExpenseAction} className="space-y-2 rounded-xl border border-slate-200 p-3">
+                {canEditShipmentCosts && shipment.shipmentCosts.length > 0 ? (
+                  <form action={upsertShipmentCostAction} className="space-y-2 rounded-xl border border-slate-200 p-3">
                     <input type="hidden" name="shipmentId" value={shipment.id} />
-                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Edit expense</p>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Edit shipment cost
+                    </p>
                     <select name="id" required className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm">
-                      <option value="">Select expense record</option>
-                      {shipment.expenses.map((row) => (
+                      <option value="">Select cost record</option>
+                      {shipment.shipmentCosts.map((row) => (
                         <option key={row.id} value={row.id}>
-                          {row.supplierName} - {row.concept}
+                          {row.supplierName} - {row.conceptCategory}
                         </option>
                       ))}
                     </select>
                     <input name="supplierName" required placeholder="Supplier name" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
-                    <input name="concept" required placeholder="Concept" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                    <select
+                      name="conceptCategory"
+                      defaultValue="OCEAN_FREIGHT"
+                      className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                    >
+                      {Object.values(ShipmentCostCategory).map((category) => (
+                        <option key={category} value={category}>
+                          {category}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      name="customConcept"
+                      placeholder="Custom concept (required if category is OTHER)"
+                      className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                    />
                     <div className="grid grid-cols-3 gap-2">
                       <input type="number" step="0.01" min={0} name="amount" required placeholder="Amount" className="rounded-lg border border-slate-200 px-3 py-2 text-sm" />
                       <select name="currencyCode" className="rounded-lg border border-slate-200 px-3 py-2 text-sm">
@@ -1033,15 +1130,21 @@ export function ShipmentDetailClient({
                         <option value="EUR">EUR</option>
                         <option value="ARS">ARS</option>
                       </select>
-                      <input type="number" step="0.0001" min={0} name="exchangeRate" placeholder="Rate" className="rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                      <select
+                        name="status"
+                        className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                      >
+                        {Object.values(ShipmentCostStatus).map((status) => (
+                          <option key={status} value={status}>
+                            {status}
+                          </option>
+                        ))}
+                      </select>
                     </div>
                     <input type="date" name="dueDate" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
-                    <select name="status" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm">
-                      {Object.values(FinancialRecordStatus).map((status) => <option key={status} value={status}>{status}</option>)}
-                    </select>
                     <textarea name="notes" rows={2} placeholder="Notes" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
                     <button type="submit" className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-50">
-                      Update expense
+                      Update cost
                     </button>
                   </form>
                 ) : null}
@@ -1233,7 +1336,7 @@ export function ShipmentDetailClient({
               incotermCode: shipment.incotermCode ?? "",
               serviceLevel: shipment.serviceLevel ?? "",
               commodity: shipment.commodity ?? "",
-              mode: shipment.mode as "AIR" | "OCEAN" | "ROAD",
+              mode: shipment.mode as "AIR" | "OCEAN" | "ROAD" | "COURIER",
               direction: shipment.direction as "IMPORT" | "EXPORT",
               status: shipment.status as
                 | "DRAFT"

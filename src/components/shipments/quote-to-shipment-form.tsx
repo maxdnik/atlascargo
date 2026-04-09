@@ -65,14 +65,9 @@ export function QuoteToShipmentForm({ quotes }: QuoteToShipmentFormProps) {
             ))}
           </select>
         </div>
-        <div>
-          <label className="mb-1 block text-sm font-medium text-slate-700">New Shipment #</label>
-          <input
-            name="shipmentNumber"
-            required
-            placeholder="SHP-2026-0003"
-            className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm uppercase"
-          />
+        <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Shipment #</p>
+          <p className="mt-1 font-medium text-slate-800">Auto-generated from quote mode + direction</p>
         </div>
       </div>
       {state.error ? <p className="text-sm text-red-600">{state.error}</p> : null}

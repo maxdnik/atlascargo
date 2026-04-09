@@ -11,11 +11,13 @@ import {
   deleteInvoiceDirectAction,
   deleteExpenseDirectAction,
   deleteRevenueDirectAction,
+  deleteShipmentCostDirectAction,
   deleteShipmentDocumentDirectAction,
   updateShipmentAction,
   upsertExpenseDirectAction,
   upsertInvoiceDirectAction,
   upsertRevenueDirectAction,
+  upsertShipmentCostDirectAction,
   upsertShipmentDocumentDirectAction,
 } from "@/app/(dashboard)/shipments/actions";
 import { canUser, enforcePagePermission } from "@/lib/permissions";
@@ -95,6 +97,9 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
     PermissionResource.EXPENSES,
     PermissionAction.DELETE,
   );
+  const canCreateShipmentCosts = canCreateExpenses;
+  const canEditShipmentCosts = canEditExpenses;
+  const canDeleteShipmentCosts = canDeleteExpenses;
   const canViewFinancialSummary =
     (await canUser(
       { id: session.userId, role: session.role, companyId: session.companyId },
@@ -129,17 +134,20 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
     notFound();
   }
 
-  const totalRevenue = shipment.revenues.reduce((sum, row) => sum + Number(row.amountBase), 0);
-  const totalExpense = shipment.expenses.reduce((sum, row) => sum + Number(row.amountBase), 0);
-  const grossProfit = totalRevenue - totalExpense;
-  const marginPct = totalRevenue > 0 ? (grossProfit / totalRevenue) * 100 : null;
+  const invoicedRevenue = shipment.invoices.reduce((sum, row) => sum + Number(row.total), 0);
+  const totalShipmentCost = shipment.shipmentCosts.reduce((sum, row) => sum + Number(row.amount), 0);
+  const grossProfit = invoicedRevenue - totalShipmentCost;
+  const marginPct = invoicedRevenue > 0 ? (grossProfit / invoicedRevenue) * 100 : null;
   const quotedSell = shipment.quote ? Number(shipment.quote.totalSell) : null;
   const quotedCost = shipment.quote ? Number(shipment.quote.totalBuy) : null;
   const quotedMarginAmount = shipment.quote ? Number(shipment.quote.marginAmount) : null;
   const quotedMarginPct = shipment.quote ? Number(shipment.quote.marginPct) * 100 : null;
-  const hasFinancials = shipment.revenues.length > 0 || shipment.expenses.length > 0;
-  const marginDeteriorated =
-    quotedMarginAmount !== null && hasFinancials && grossProfit < quotedMarginAmount;
+  const hasRevenue = shipment.invoices.length > 0 && invoicedRevenue > 0;
+  const hasCosts = shipment.shipmentCosts.length > 0 && totalShipmentCost > 0;
+  const hasFinancials = hasRevenue && hasCosts;
+  const quotedMarginPctValue = quotedMarginPct ?? null;
+  const varianceMarginPct = hasFinancials && quotedMarginPctValue !== null ? marginPct! - quotedMarginPctValue : null;
+  const marginDeteriorated = hasFinancials && quotedMarginPctValue !== null ? marginPct! < quotedMarginPctValue : false;
 
   return (
     <ShipmentDetailClient
@@ -199,10 +207,13 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
           quotedMarginPct,
         },
         actualFinancials: {
-          totalRevenue,
-          totalExpense,
+          invoicedRevenue,
+          totalShipmentCost,
           grossProfit,
           marginPct,
+          varianceMarginPct,
+          hasRevenue,
+          hasCosts,
           hasFinancials,
           marginDeteriorated,
         },
@@ -248,6 +259,17 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
           status: row.status,
           notes: row.notes,
         })),
+        shipmentCosts: shipment.shipmentCosts.map((row) => ({
+          id: row.id,
+          supplierName: row.supplierName,
+          conceptCategory: row.conceptCategory,
+          customConcept: row.customConcept,
+          amount: Number(row.amount),
+          currencyCode: row.currencyCode,
+          dueDate: row.dueDate?.toISOString() ?? null,
+          status: row.status,
+          notes: row.notes,
+        })),
         invoices: shipment.invoices.map((row) => ({
           id: row.id,
           invoiceNumber: row.invoiceNumber,
@@ -284,6 +306,9 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
         canCreateExpenses,
         canEditExpenses,
         canDeleteExpenses,
+        canCreateShipmentCosts,
+        canEditShipmentCosts,
+        canDeleteShipmentCosts,
         canViewFinancialSummary,
         canCreateInvoices,
         canEditInvoices,
@@ -297,6 +322,8 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
         upsertRevenueDirectAction,
         deleteExpenseDirectAction,
         upsertExpenseDirectAction,
+        deleteShipmentCostDirectAction,
+        upsertShipmentCostDirectAction,
         createInvoiceDirectAction,
         upsertInvoiceDirectAction,
         issueInvoiceAFIPDirectAction,

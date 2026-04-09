@@ -1,8 +1,9 @@
 import {
-  FinancialRecordStatus,
   GeneralExpenseCategory,
   GeneralExpenseStatus,
+  FinancialRecordStatus,
   ShipmentStatus,
+  ShipmentCostStatus,
   type InvoiceStatus,
 } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
@@ -19,7 +20,7 @@ type ShipmentFinanceRecord = {
 type ForecastTransaction = {
   id: string;
   type: "INFLOW" | "OUTFLOW";
-  source: "AR_INVOICE" | "AP_COST" | "GENERAL_OVERHEAD";
+  source: "AR_INVOICE" | "AP_SHIPMENT_COST" | "GENERAL_OVERHEAD";
   date: Date;
   amount: number;
   shipmentNumber: string;
@@ -84,7 +85,14 @@ export type AccountsPayableRow = {
   reference: string;
   amount: number;
   dueDate: Date | null;
-  status: "PAID" | "OVERDUE" | "CANCELLED" | InvoiceStatus | FinancialRecordStatus;
+  status:
+    | "PAID"
+    | "OVERDUE"
+    | "CANCELLED"
+    | InvoiceStatus
+    | FinancialRecordStatus
+    | ShipmentCostStatus
+    | GeneralExpenseStatus;
   outstanding: number;
 };
 
@@ -222,12 +230,12 @@ function invoiceStatusLabel(
 }
 
 function payableStatusLabel(
-  status: FinancialRecordStatus | InvoiceStatus,
+  status: ShipmentCostStatus | InvoiceStatus | GeneralExpenseStatus,
   dueDate: Date | null,
   today: Date,
   outstanding: number,
-): "PAID" | "OVERDUE" | "CANCELLED" | InvoiceStatus | FinancialRecordStatus {
-  if (outstanding <= 0 || status === FinancialRecordStatus.PAID) {
+): "PAID" | "OVERDUE" | "CANCELLED" | InvoiceStatus | ShipmentCostStatus | GeneralExpenseStatus {
+  if (outstanding <= 0 || status === ShipmentCostStatus.PAID || status === GeneralExpenseStatus.PAID) {
     return "PAID";
   }
   if (status === "CANCELLED") return "CANCELLED";
@@ -240,7 +248,7 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
   const currentMonthStart = monthStart(today);
   const currentMonthEnd = monthEnd(today);
 
-  const [shipments, revenues, expenses, generalExpenses, invoices, monthlyPayments] = await Promise.all([
+  const [shipments, shipmentCosts, generalExpenses, invoices, monthlyPayments] = await Promise.all([
     prisma.shipment.findMany({
       where: { companyId },
       select: {
@@ -252,40 +260,16 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
       orderBy: { createdAt: "desc" },
       take: 300,
     }),
-    prisma.revenue.findMany({
-      where: { companyId },
-      select: {
-        id: true,
-        shipmentId: true,
-        amountBase: true,
-        dueDate: true,
-        status: true,
-        createdAt: true,
-        concept: true,
-        shipment: {
-          select: {
-            shipmentNumber: true,
-            status: true,
-            customer: { select: { legalName: true } },
-          },
-        },
-        customer: { select: { legalName: true } },
-        payments: {
-          select: {
-            amount: true,
-            paymentDate: true,
-          },
-        },
-      },
-    }),
-    prisma.expense.findMany({
+    prisma.shipmentCost.findMany({
       where: { companyId },
       select: {
         id: true,
         shipmentId: true,
         supplierName: true,
-        concept: true,
-        amountBase: true,
+        conceptCategory: true,
+        customConcept: true,
+        amount: true,
+        currencyCode: true,
         dueDate: true,
         status: true,
         createdAt: true,
@@ -294,12 +278,6 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
             shipmentNumber: true,
             status: true,
             customer: { select: { legalName: true } },
-          },
-        },
-        payments: {
-          select: {
-            amount: true,
-            paymentDate: true,
           },
         },
       },
@@ -329,6 +307,8 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
       select: {
         id: true,
         invoiceNumber: true,
+        shipmentId: true,
+        createdAt: true,
         status: true,
         dueDate: true,
         issueDate: true,
@@ -377,33 +357,39 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
     });
   }
 
-  const revenueCurrentMonth = revenues
-    .filter((entry) => entry.createdAt >= currentMonthStart && entry.createdAt < currentMonthEnd)
-    .reduce((sum, entry) => sum + asNumber(entry.amountBase), 0);
+  const revenueCurrentMonth = invoices
+    .filter((entry) => {
+      const referenceDate = entry.issueDate ?? entry.createdAt;
+      return referenceDate >= currentMonthStart && referenceDate < currentMonthEnd;
+    })
+    .reduce((sum, entry) => sum + asNumber(entry.total), 0);
 
-  const shipmentCostsCurrentMonth = expenses
+  const shipmentCostsCurrentMonth = shipmentCosts
     .filter((entry) => entry.createdAt >= currentMonthStart && entry.createdAt < currentMonthEnd)
-    .reduce((sum, entry) => sum + asNumber(entry.amountBase), 0);
+    .reduce((sum, entry) => sum + asNumber(entry.amount), 0);
   const generalOverheadCurrentMonth = generalExpenses
     .filter((entry) => entry.createdAt >= currentMonthStart && entry.createdAt < currentMonthEnd)
     .reduce((sum, entry) => sum + asNumber(entry.amount), 0);
 
-  for (const revenue of revenues) {
-    const row = toMapRow(shipmentMap, revenue.shipmentId, {
-      shipmentNumber: revenue.shipment.shipmentNumber,
-      customer: revenue.shipment.customer.legalName,
-      status: revenue.shipment.status,
+  for (const invoice of invoices) {
+    if (!invoice.shipment) {
+      continue;
+    }
+    const row = toMapRow(shipmentMap, invoice.shipmentId, {
+      shipmentNumber: invoice.shipment.shipmentNumber,
+      customer: invoice.customer?.legalName ?? "-",
+      status: shipmentMap.get(invoice.shipmentId)?.status ?? ShipmentStatus.DRAFT,
     });
-    row.revenue += asNumber(revenue.amountBase);
+    row.revenue += asNumber(invoice.total);
   }
 
-  for (const expense of expenses) {
-    const row = toMapRow(shipmentMap, expense.shipmentId, {
-      shipmentNumber: expense.shipment.shipmentNumber,
-      customer: expense.shipment.customer.legalName,
-      status: expense.shipment.status,
+  for (const shipmentCost of shipmentCosts) {
+    const row = toMapRow(shipmentMap, shipmentCost.shipmentId, {
+      shipmentNumber: shipmentCost.shipment.shipmentNumber,
+      customer: shipmentCost.shipment.customer.legalName,
+      status: shipmentCost.shipment.status,
     });
-    row.cost += asNumber(expense.amountBase);
+    row.cost += asNumber(shipmentCost.amount);
   }
 
   const shipmentProfitability = Array.from(shipmentMap.values())
@@ -457,18 +443,20 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
       return aTime - bTime;
     });
 
-  const payablesFromVendorCosts = expenses.map<AccountsPayableRow>((expense) => {
-    const amount = asNumber(expense.amountBase);
-    const paid = expense.payments.reduce((sum, payment) => sum + asNumber(payment.amount), 0);
-    const outstanding = getOutstanding(amount, paid);
+  const payablesFromShipmentCosts = shipmentCosts.map<AccountsPayableRow>((shipmentCost) => {
+    const amount = asNumber(shipmentCost.amount);
+    const outstanding = shipmentCost.status === ShipmentCostStatus.PAID ? 0 : amount;
+    const reference =
+      shipmentCost.customConcept?.trim() ||
+      shipmentCost.conceptCategory.replaceAll("_", " ");
     return {
-      id: expense.id,
-      vendor: expense.supplierName,
-      shipment: expense.shipment.shipmentNumber,
-      reference: expense.concept,
+      id: shipmentCost.id,
+      vendor: shipmentCost.supplierName,
+      shipment: shipmentCost.shipment.shipmentNumber,
+      reference,
       amount,
-      dueDate: expense.dueDate,
-      status: payableStatusLabel(expense.status, expense.dueDate, today, outstanding),
+      dueDate: shipmentCost.dueDate,
+      status: payableStatusLabel(shipmentCost.status, shipmentCost.dueDate, today, outstanding),
       outstanding,
     };
   });
@@ -484,7 +472,7 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
     outstanding: expense.status === GeneralExpenseStatus.PAID ? 0 : asNumber(expense.amount),
   }));
 
-  const accountsPayable = [...payablesFromVendorCosts, ...payablesFromGeneralExpenses].sort((a, b) => {
+  const accountsPayable = [...payablesFromShipmentCosts, ...payablesFromGeneralExpenses].sort((a, b) => {
     const aTime = a.dueDate ? a.dueDate.getTime() : Number.MAX_SAFE_INTEGER;
     const bTime = b.dueDate ? b.dueDate.getTime() : Number.MAX_SAFE_INTEGER;
     return aTime - bTime;
@@ -496,9 +484,7 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
   const currentMonthInflows = monthlyPayments
     .filter((payment) => payment.revenueId || payment.invoice?.customerId)
     .reduce((sum, payment) => sum + asNumber(payment.amount), 0);
-  const currentMonthOutflows = monthlyPayments
-    .filter((payment) => payment.expenseId)
-    .reduce((sum, payment) => sum + asNumber(payment.amount), 0);
+  const currentMonthOutflows = shipmentCostsCurrentMonth + generalOverheadCurrentMonth;
 
   const totalCostsCurrentMonth = shipmentCostsCurrentMonth + generalOverheadCurrentMonth;
   const overview: FinanceOverview = {
@@ -596,33 +582,27 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
 
   }
 
-  for (const expense of expenses) {
-    if (expense.status === FinancialRecordStatus.PAID && expense.payments.length === 0) {
+  for (const cost of shipmentCosts) {
+    if (cost.status === ShipmentCostStatus.PAID) {
       continue;
     }
 
-    const paid = expense.payments.reduce((sum, payment) => sum + asNumber(payment.amount), 0);
-    const amount = asNumber(expense.amountBase);
-    const outstanding = getOutstanding(amount, paid);
-    const expectedDate = expense.dueDate ?? expense.createdAt;
-    const actualDate =
-      expense.status === FinancialRecordStatus.PAID
-        ? latestDate(expense.payments.map((payment) => payment.paymentDate))
-        : null;
-    const forecastDate = actualDate ?? expectedDate;
+    const amount = asNumber(cost.amount);
+    const expectedDate = cost.dueDate ?? cost.createdAt;
+    const forecastDate = expectedDate;
     if (!forecastDate) continue;
 
     forecastTransactions.push({
-      id: `cost-${expense.id}`,
+      id: `scost-${cost.id}`,
       type: "OUTFLOW",
-      source: "AP_COST",
+      source: "AP_SHIPMENT_COST",
       date: forecastDate,
-      amount: outstanding > 0 ? outstanding : Math.max(paid, amount),
-      shipmentNumber: expense.shipment.shipmentNumber,
-      party: expense.supplierName,
-      reference: expense.concept,
+      amount,
+      shipmentNumber: cost.shipment.shipmentNumber,
+      party: cost.supplierName,
+      reference: cost.customConcept?.trim() || cost.conceptCategory.replaceAll("_", " "),
       expectedDate,
-      actualDate,
+      actualDate: cost.status === ShipmentCostStatus.PAID ? expectedDate : null,
     });
   }
 

@@ -40,6 +40,7 @@ enum PermissionResource {
 enum TransportMode {
   AIR
   OCEAN
+  COURIER
   ROAD
   RAIL
   MULTIMODAL
@@ -180,6 +181,25 @@ enum GeneralExpenseStatus {
   CANCELLED
 }
 
+enum ShipmentCostCategory {
+  OCEAN_FREIGHT
+  AIR_FREIGHT
+  ORIGIN_CHARGES
+  DESTINATION_CHARGES
+  TERMINAL
+  TRUCKING
+  CUSTOMS_BROKER
+  DOCUMENTATION
+  HANDLING
+  OTHER
+}
+
+enum ShipmentCostStatus {
+  PENDING
+  CONFIRMED
+  PAID
+}
+
 enum NotificationLevel {
   INFO
   WARNING
@@ -228,8 +248,10 @@ model Company {
   partners      BusinessPartner[]
   quotes        Quote[]
   shipments     Shipment[]
+  shipmentNumberCounters ShipmentNumberCounter[]
   revenues      Revenue[]
   expenses      Expense[]
+  shipmentCosts ShipmentCost[]
   exchangeRates ExchangeRate[]
   invoices      Invoice[]
   generalExpenses GeneralExpense[]
@@ -258,6 +280,7 @@ model Branch {
   shipments   Shipment[]
   revenues    Revenue[]
   expenses    Expense[]
+  shipmentCosts ShipmentCost[]
   invoices    Invoice[]
   generalExpenses GeneralExpense[]
   payments    Payment[]
@@ -385,6 +408,7 @@ model Currency {
   quotes       Quote[]
   revenues     Revenue[]
   expenses     Expense[]
+  shipmentCosts ShipmentCost[]
   invoices     Invoice[]
   generalExpenses GeneralExpense[]
   payments     Payment[]
@@ -671,14 +695,30 @@ model Shipment {
   documents          ShipmentDocument[]
   revenues           Revenue[]
   expenses           Expense[]
+  shipmentCosts      ShipmentCost[]
   invoices           Invoice[]
   tasks              Task[]
   notesLog           Note[]
 
   @@unique([companyId, shipmentNumber])
+  @@index([shipmentNumber])
   @@index([companyId, status, mode])
   @@index([companyId, eta])
   @@index([companyId, customerId])
+}
+
+model ShipmentNumberCounter {
+  id        String   @id @default(cuid())
+  companyId String
+  prefix    String
+  nextValue Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, prefix])
+  @@index([companyId, prefix, nextValue])
 }
 
 model ShipmentParty {
@@ -835,6 +875,32 @@ model Expense {
 
   @@index([companyId, dueDate, status])
   @@index([supplierId, status])
+}
+
+model ShipmentCost {
+  id              String               @id @default(cuid())
+  companyId       String
+  branchId        String?
+  shipmentId      String
+  supplierName    String
+  conceptCategory ShipmentCostCategory
+  customConcept   String?
+  amount          Decimal
+  currencyCode    String
+  dueDate         DateTime?
+  status          ShipmentCostStatus   @default(PENDING)
+  notes           String?
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+
+  company  Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch   Branch?  @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  shipment Shipment @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  currency Currency @relation(fields: [currencyCode], references: [code], onDelete: Restrict)
+
+  @@index([companyId, shipmentId, status])
+  @@index([companyId, dueDate])
+  @@index([companyId, conceptCategory])
 }
 
 model Invoice {
