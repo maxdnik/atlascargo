@@ -13,6 +13,7 @@ import { PermissionAction, PermissionResource } from "@prisma/client";
 import { enforcePagePermission } from "@/lib/permissions";
 import { getActionCenterData } from "@/lib/action-center";
 import { resolveActionCenterAlertAction } from "@/app/(dashboard)/dashboard/action-center/actions";
+import { getStatusLabel } from "@/lib/shipment-state";
 
 type Severity = "HIGH" | "MEDIUM" | "LOW";
 
@@ -34,18 +35,6 @@ function badgeClass(severity: Severity) {
   if (severity === "HIGH") return "bg-rose-100 text-rose-700";
   if (severity === "MEDIUM") return "bg-amber-100 text-amber-800";
   return "bg-slate-100 text-slate-700";
-}
-
-function rowSeverity(issue: string): Severity {
-  const normalized = issue.toLowerCase();
-  if (
-    normalized.includes("overdue") ||
-    normalized.includes("delayed") ||
-    normalized.includes("missing")
-  ) {
-    return "HIGH";
-  }
-  return "MEDIUM";
 }
 
 export default async function ActionCenterPage() {
@@ -286,7 +275,10 @@ export default async function ActionCenterPage() {
                         </p>
                       ) : (
                         rows.map((row) => (
-                          <div key={row.id} className={`rounded-lg border px-2.5 py-2 text-xs ${statusClass(severity)}`}>
+                          <div
+                            key={row.id}
+                            className={`rounded-lg border px-2.5 py-2 text-xs ${statusClass(row.severity ?? severity)}`}
+                          >
                             <p className="font-semibold text-slate-900">
                               {row.shipmentNumber} · {row.customer}
                             </p>
@@ -336,9 +328,8 @@ export default async function ActionCenterPage() {
                       </p>
                     ) : (
                       block.items.map((item) => {
-                        const severity = rowSeverity(item.issue);
                         return (
-                          <div key={item.id} className={`rounded-lg border px-2.5 py-2 text-xs ${statusClass(severity)}`}>
+                          <div key={item.id} className={`rounded-lg border px-2.5 py-2 text-xs ${statusClass(item.severity)}`}>
                             <p className="font-semibold text-slate-900">
                               {item.shipmentNumber} · {item.customer}
                             </p>
@@ -477,7 +468,7 @@ export default async function ActionCenterPage() {
                     <p className="text-xs font-semibold text-slate-900">{item.shipmentNumber}</p>
                     <p className="text-xs text-slate-600">{item.customer}</p>
                     <p className="text-[11px] text-slate-500">
-                      {item.status} · {item.updatedAt.toLocaleString()}
+                      {getStatusLabel(item.status)} · {item.updatedAt.toLocaleString()}
                     </p>
                   </Link>
                 ))

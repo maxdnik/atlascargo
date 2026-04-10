@@ -7,6 +7,7 @@ import {
   type InvoiceStatus,
 } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { deriveShipmentState } from "@/lib/shipment-state";
 
 type ShipmentFinanceRecord = {
   shipmentId: string;
@@ -255,6 +256,17 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
         id: true,
         shipmentNumber: true,
         status: true,
+        atd: true,
+        ata: true,
+        deliveredAt: true,
+        milestones: {
+          select: {
+            code: true,
+            status: true,
+            expectedAt: true,
+            actualAt: true,
+          },
+        },
         customer: { select: { legalName: true } },
       },
       orderBy: { createdAt: "desc" },
@@ -277,6 +289,17 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
           select: {
             shipmentNumber: true,
             status: true,
+            atd: true,
+            ata: true,
+            deliveredAt: true,
+            milestones: {
+              select: {
+                code: true,
+                status: true,
+                expectedAt: true,
+                actualAt: true,
+              },
+            },
             customer: { select: { legalName: true } },
           },
         },
@@ -345,13 +368,30 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
   ]);
 
   const shipmentMap = new Map<string, ShipmentFinanceRecord>();
+  const derivedStatusByShipmentId = new Map<string, ShipmentStatus>();
 
   for (const shipment of shipments) {
+    const derived = deriveShipmentState(
+      {
+        status: shipment.status,
+        atd: shipment.atd,
+        ata: shipment.ata,
+        deliveredAt: shipment.deliveredAt,
+      },
+      shipment.milestones.map((milestone) => ({
+        code: milestone.code,
+        status: milestone.status,
+        expectedAt: milestone.expectedAt,
+        actualAt: milestone.actualAt,
+      })),
+    );
+    const derivedStatus = derived.masterStatus as ShipmentStatus;
+    derivedStatusByShipmentId.set(shipment.id, derivedStatus);
     shipmentMap.set(shipment.id, {
       shipmentId: shipment.id,
       shipmentNumber: shipment.shipmentNumber,
       customer: shipment.customer.legalName,
-      status: shipment.status,
+      status: derivedStatus,
       revenue: 0,
       cost: 0,
     });
@@ -387,7 +427,22 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
     const row = toMapRow(shipmentMap, shipmentCost.shipmentId, {
       shipmentNumber: shipmentCost.shipment.shipmentNumber,
       customer: shipmentCost.shipment.customer.legalName,
-      status: shipmentCost.shipment.status,
+      status:
+        (derivedStatusByShipmentId.get(shipmentCost.shipmentId) ??
+          (deriveShipmentState(
+            {
+              status: shipmentCost.shipment.status,
+              atd: shipmentCost.shipment.atd,
+              ata: shipmentCost.shipment.ata,
+              deliveredAt: shipmentCost.shipment.deliveredAt,
+            },
+            shipmentCost.shipment.milestones.map((milestone) => ({
+              code: milestone.code,
+              status: milestone.status,
+              expectedAt: milestone.expectedAt,
+              actualAt: milestone.actualAt,
+            })),
+          ).masterStatus as ShipmentStatus)),
     });
     row.cost += asNumber(shipmentCost.amount);
   }

@@ -26,7 +26,7 @@ import {
 import { canUser, enforcePagePermission } from "@/lib/permissions";
 import { ShipmentDetailClient } from "@/components/shipments/shipment-detail-client";
 import { InvoiceLineType, InvoiceStatus } from "@prisma/client";
-import { deriveShipmentState } from "@/lib/domain/derive-shipment-state";
+import { deriveShipmentState } from "@/lib/shipment-state";
 
 type ShipmentEditPageProps = {
   params: Promise<{

@@ -1,8 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { AlertSeverity, MilestoneStatus, QuoteStatus, ShipmentStatus } from "@prisma/client";
 import { listOpenAlertsForCompany } from "@/lib/alerts";
-import { deriveShipmentState } from "@/lib/domain/derive-shipment-state";
-import { getStatusLabel } from "@/lib/domain/derive-shipment-state";
+import { deriveShipmentState, getStatusLabel } from "@/lib/shipment-state";
 
 const DEFAULT_COMPANY_ID = "comp_atlascargo";
 

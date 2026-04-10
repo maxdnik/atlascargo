@@ -30,7 +30,7 @@ import type { Prisma } from "@prisma/client";
 import type { ShipmentActionState } from "@/app/(dashboard)/shipments/actions";
 import { MilestoneTimeline } from "@/components/shipments/milestone-timeline";
 import { getStatusLabel } from "@/lib/shipment-state";
-import { SHIPMENT_STAGE_SEQUENCE } from "@/lib/domain/derive-shipment-state";
+import { SHIPMENT_STAGE_SEQUENCE } from "@/lib/shipment-state";
 import { ShipmentForm } from "@/components/shipments/shipment-form";
 
 type ShipmentDetailViewModel = {

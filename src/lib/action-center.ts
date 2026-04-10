@@ -4,7 +4,7 @@ import { listOpenAlertsForCompany, type AlertFeedRow } from "@/lib/alerts";
 import {
   deriveShipmentState,
   isExecutionShipmentStatus,
-} from "@/lib/domain/derive-shipment-state";
+} from "@/lib/shipment-state";
 
 const STUCK_THRESHOLDS_DAYS: Partial<Record<ShipmentStatus, number>> = {
   [ShipmentStatus.BOOKING_REQUESTED]: 3,

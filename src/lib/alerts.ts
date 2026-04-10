@@ -8,7 +8,7 @@ import {
 } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { notifyAlertCreated } from "@/lib/notifications";
-import { deriveShipmentState } from "@/lib/domain/derive-shipment-state";
+import { deriveShipmentState } from "@/lib/shipment-state";
 
 const TWO_DAYS_MS = 48 * 60 * 60 * 1000;
 const MANAGED_ALERT_TYPES = [
@@ -131,7 +131,6 @@ function deriveCandidates(now: Date, shipment: ShipmentSnapshot): AlertCandidate
     {
       status: shipment.status,
       atd: shipment.atd,
-      ata: null,
       deliveredAt: shipment.deliveredAt,
     },
     [],

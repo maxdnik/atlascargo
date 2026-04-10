@@ -1,15 +1,8 @@
 import { MilestoneStatus } from "@prisma/client";
-
-const STRICT_MILESTONE_SEQUENCE = [
-  "BOOKING_REQUESTED",
-  "BOOKING_CONFIRMED",
-  "CARGO_READY",
-  "DEPARTED",
-  "ARRIVED",
-  "CUSTOMS_IN_PROGRESS",
-  "DELIVERED",
-  "CLOSED",
-] as const;
+import {
+  STRICT_MILESTONE_SEQUENCE,
+  getMilestoneCompletionHint,
+} from "@/lib/shipment-state";
 
 export const AUTO_COMPLETE_MISSING_SEQUENCE_MILESTONES =
   process.env.AUTO_COMPLETE_MISSING_MILESTONES === "1";
@@ -52,17 +45,14 @@ export function canCompleteMilestoneInSequence(input: {
   if (targetIndex <= 0) {
     return { canComplete: true, blockedReason: null as string | null };
   }
-  const milestonesByCode = new Map(input.milestones.map((row) => [row.code, row]));
-  const prerequisiteCodes = STRICT_MILESTONE_SEQUENCE.slice(0, targetIndex);
-  const missing = prerequisiteCodes.find((code) => {
-    const row = milestonesByCode.get(code);
-    if (!row) return true;
-    return !(row.actualAt || row.status === MilestoneStatus.COMPLETED);
+  const hint = getMilestoneCompletionHint({
+    targetCode: input.targetCode,
+    milestones: input.milestones,
   });
-  if (missing) {
+  if (!hint.canComplete) {
     return {
       canComplete: false,
-      blockedReason: `Complete ${missing} first`,
+      blockedReason: hint.blockedReason,
     };
   }
   return { canComplete: true, blockedReason: null as string | null };
@@ -84,14 +74,11 @@ export function validateMilestoneCompletionSequence(input: {
     return { missingPrerequisites: [], autoCompleteCodes: [] as string[] };
   }
 
-  const milestonesByCode = new Map(input.milestones.map((row) => [row.code, row]));
-  const prerequisiteCodes = STRICT_MILESTONE_SEQUENCE.slice(0, targetIndex);
-  const missingPrerequisites = prerequisiteCodes.filter((code) => {
-    const milestone = milestonesByCode.get(code);
-    if (!milestone) return true;
-    if (milestone.actualAt) return false;
-    return milestone.status !== MilestoneStatus.COMPLETED;
+  const hint = getMilestoneCompletionHint({
+    targetCode: input.targetCode,
+    milestones: input.milestones,
   });
+  const missingPrerequisites = [...hint.missingPrerequisites];
 
   if (missingPrerequisites.length === 0) {
     return { missingPrerequisites: [], autoCompleteCodes: [] as string[] };

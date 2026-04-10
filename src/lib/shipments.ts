@@ -1,7 +1,7 @@
 import { ShipmentStatus, TransportMode } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
-import { deriveShipmentState } from "@/lib/domain/derive-shipment-state";
+import { deriveShipmentState } from "@/lib/shipment-state";
 
 type ShipmentListFilters = {
   q?: string;

@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { PermissionAction, PermissionResource } from "@prisma/client";
 import { getDashboardKpis } from "@/lib/dashboard";
+import { getStatusLabel } from "@/lib/shipment-state";
 import { formatNumber } from "@/lib/format";
 import { enforcePagePermission } from "@/lib/permissions";
 import { resolveActionCenterAlertAction } from "@/app/(dashboard)/dashboard/action-center/actions";
@@ -187,7 +188,7 @@ export default async function DashboardPage() {
                                       : "bg-slate-100 text-slate-700"
                             }`}
                           >
-                            {shipment.status}
+                            {shipment.statusLabel ?? getStatusLabel(shipment.status)}
                           </span>
                         </td>
                         <td className="px-4 py-3 font-medium text-slate-900">{shipment.shipmentNumber}</td>
