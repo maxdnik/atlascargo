@@ -1,8 +1,12 @@
 "use server";
 
+import { randomUUID } from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import {
+  DocumentParsingStatus,
   DocumentType,
   DocumentRecordStatus,
   FinancialRecordStatus,
@@ -27,6 +31,24 @@ import {
   markInvoicePaid,
   updateInvoiceHeader,
 } from "@/lib/invoices";
+import {
+  runAlertChecksForInvoiceMutation,
+  runAlertChecksForShipmentUpdate,
+} from "@/lib/alerts";
+import { createAutomationAlertIfMissing } from "@/lib/automation";
+import {
+  applyParsedDocumentToShipment,
+  parseShipmentDocumentWithMock,
+  type ParsedShipmentFieldKey,
+} from "@/lib/document-parsing";
+import {
+  AUTO_COMPLETE_MISSING_SEQUENCE_MILESTONES,
+  MilestoneSequenceError,
+  validateMilestoneCompletionSequence,
+} from "@/lib/milestone-sequence";
+import {
+  syncShipmentStatusFromMilestones,
+} from "@/lib/shipment-status";
 
 const TRANSPORT_MODES = ["AIR", "OCEAN", "ROAD", "COURIER"] as const;
 const TRADE_DIRECTIONS = ["IMPORT", "EXPORT"] as const;
@@ -91,6 +113,7 @@ const shipmentSchema = z.object({
 export type ShipmentActionState = {
   success: boolean;
   error?: string;
+  errorCode?: string;
 };
 
 const BASE_CURRENCY = "USD";
@@ -602,6 +625,11 @@ export async function createShipmentAction(
       },
     });
 
+    await runAlertChecksForShipmentUpdate({
+      companyId: ctx.companyId,
+      shipmentId: created.id,
+    });
+
     revalidatePath("/shipments");
     revalidatePath("/dashboard");
 
@@ -804,24 +832,58 @@ export async function updateShipmentAction(
         });
       }
 
-      return shipment;
+      const syncResult = await syncShipmentStatusFromMilestones({
+        companyId: ctx.companyId,
+        shipmentId: shipment.id,
+        tx,
+      });
+
+      const persisted = await tx.shipment.findUnique({
+        where: { id: shipment.id },
+        select: { id: true, status: true },
+      });
+      if (!persisted) {
+        throw new Error("Shipment not found after status synchronization");
+      }
+
+      return {
+        shipmentId: persisted.id,
+        previousStatus: before.status,
+        nextStatus: persisted.status,
+        statusChanged: syncResult.statusChanged,
+        datesChanged: syncResult.datesChanged,
+        milestoneStatusesChanged: syncResult.milestoneStatusesChanged,
+      };
     });
 
     await prisma.activityLog.create({
       data: {
         companyId: ctx.companyId,
         entityType: "SHIPMENT",
-        entityId: updated.id,
+        entityId: updated.shipmentId,
         action: "UPDATE",
         actorId: ctx.userId,
         beforeJson: before,
-        afterJson: updated,
+        afterJson: {
+          shipmentId: updated.shipmentId,
+          status: updated.nextStatus,
+          previousStatus: updated.previousStatus,
+          statusChanged: updated.statusChanged,
+          datesChanged: updated.datesChanged,
+          milestoneStatusesChanged: updated.milestoneStatusesChanged,
+        },
       },
     });
 
+    await runAlertChecksForShipmentUpdate({
+      companyId: ctx.companyId,
+      shipmentId: updated.shipmentId,
+    });
+
     revalidatePath("/shipments");
-    revalidatePath(`/shipments/${updated.id}`);
+    revalidatePath(`/shipments/${updated.shipmentId}`);
     revalidatePath("/dashboard");
+    revalidatePath("/dashboard/action-center");
 
     return { success: true };
   } catch (error) {
@@ -841,15 +903,25 @@ const milestoneUpdateSchema = z.object({
 });
 
 const shipmentDocumentSchema = z.object({
-  id: z.string().optional(),
+  replaceOfId: z.string().optional(),
   shipmentId: z.string().min(1),
   docType: z.nativeEnum(DocumentType),
-  fileName: z.string().min(2).max(180),
   referenceNumber: z.string().max(80).optional(),
   issueDate: z.string().optional(),
-  version: z.coerce.number().int().min(1).max(100).optional(),
-  status: z.nativeEnum(DocumentRecordStatus),
+  status: z.nativeEnum(DocumentRecordStatus).optional(),
   notes: z.string().max(600).optional(),
+});
+
+const triggerDocumentParsingSchema = z.object({
+  shipmentId: z.string().min(1),
+  shipmentDocumentId: z.string().min(1),
+});
+
+const applyDocumentParsingSchema = z.object({
+  shipmentId: z.string().min(1),
+  parsingResultId: z.string().min(1),
+  strategy: z.enum(["ONLY_EMPTY", "OVERRIDE_CONFLICTS"]).optional(),
+  overrideFields: z.string().optional(),
 });
 
 const revenueSchema = z.object({
@@ -942,6 +1014,30 @@ function parseDocumentStatus(value: FormDataEntryValue | null) {
   return normalized as DocumentRecordStatus;
 }
 
+function sanitizeDocumentFileName(fileName: string) {
+  const normalized = fileName.trim().replaceAll("\\", "/");
+  const base = normalized.includes("/") ? normalized.slice(normalized.lastIndexOf("/") + 1) : normalized;
+  const cleaned = base.replace(/[^a-zA-Z0-9._-]/g, "_");
+  return cleaned.length > 0 ? cleaned.slice(0, 180) : "document.bin";
+}
+
+async function persistShipmentDocumentFile(input: { shipmentId: string; file: File }) {
+  const cleanedFileName = sanitizeDocumentFileName(input.file.name);
+  const extension = path.extname(cleanedFileName) || ".bin";
+  const storedFileName = `${Date.now()}-${randomUUID()}${extension}`;
+  const relativeDir = path.join("uploads", "shipments", input.shipmentId);
+  const absoluteDir = path.join(process.cwd(), "public", relativeDir);
+  await mkdir(absoluteDir, { recursive: true });
+
+  const bytes = Buffer.from(await input.file.arrayBuffer());
+  await writeFile(path.join(absoluteDir, storedFileName), bytes);
+
+  return {
+    fileName: cleanedFileName,
+    fileUrl: `/${relativeDir.replaceAll(path.sep, "/")}/${storedFileName}`,
+  };
+}
+
 
 async function assertShipmentAccess(companyId: string, shipmentId: string) {
   const shipment = await prisma.shipment.findFirst({
@@ -960,67 +1056,212 @@ async function assertShipmentAccess(companyId: string, shipmentId: string) {
   return shipment;
 }
 
+async function resolveActionPermissionForDocumentParsing(input: {
+  shipmentId: string;
+  requireEdit?: boolean;
+}) {
+  const viewCtx = await getContext("SHIPMENTS", "EDIT");
+  const shipment = await assertShipmentAccess(viewCtx.companyId, input.shipmentId);
+  if (input.requireEdit) {
+    await enforceActionPermission("SHIPMENTS", "EDIT");
+  }
+  return { ctx: viewCtx, shipment };
+}
+
+async function createParsingFailureAlert(input: {
+  companyId: string;
+  shipmentId: string;
+  fileName: string;
+}) {
+  const message = `Document parsing failed for ${input.fileName}. Manual review required.`;
+  await createAutomationAlertIfMissing({
+    companyId: input.companyId,
+    shipmentId: input.shipmentId,
+    message,
+  });
+}
+
+export async function triggerDocumentParsingAction(
+  _prevState: ShipmentActionState,
+  formData: FormData,
+): Promise<ShipmentActionState> {
+  try {
+    const parsed = triggerDocumentParsingSchema.parse({
+      shipmentId: formData.get("shipmentId"),
+      shipmentDocumentId: formData.get("shipmentDocumentId"),
+    });
+
+    const { ctx, shipment } = await resolveActionPermissionForDocumentParsing({
+      shipmentId: parsed.shipmentId,
+      requireEdit: false,
+    });
+
+    const document = await prisma.shipmentDocument.findFirst({
+      where: {
+        id: parsed.shipmentDocumentId,
+        shipmentId: shipment.id,
+        shipment: { companyId: ctx.companyId },
+      },
+      select: {
+        id: true,
+        fileName: true,
+      },
+    });
+    if (!document) {
+      throw new Error("Document not found for this shipment");
+    }
+
+    const result = await parseShipmentDocumentWithMock({
+      companyId: ctx.companyId,
+      userId: ctx.userId,
+      shipmentDocumentId: document.id,
+    });
+
+    if (result.status === DocumentParsingStatus.FAILED) {
+      await createParsingFailureAlert({
+        companyId: ctx.companyId,
+        shipmentId: shipment.id,
+        fileName: document.fileName,
+      });
+    }
+
+    revalidatePath(`/shipments/${shipment.id}`);
+    revalidatePath("/shipments");
+    return { success: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return { success: false, error: message };
+  }
+}
+
+export async function triggerDocumentParsingDirectAction(formData: FormData): Promise<void> {
+  const result = await triggerDocumentParsingAction({ success: false }, formData);
+  if (!result.success) {
+    throw new Error(result.error ?? "Unable to parse document");
+  }
+}
+
+export async function applyDocumentParsingAction(
+  _prevState: ShipmentActionState,
+  formData: FormData,
+): Promise<ShipmentActionState> {
+  try {
+    const parsed = applyDocumentParsingSchema.parse({
+      shipmentId: formData.get("shipmentId"),
+      parsingResultId: formData.get("parsingResultId"),
+      strategy: formData.get("strategy") || undefined,
+      overrideFields: formData.get("overrideFields") || undefined,
+    });
+
+    const { ctx, shipment } = await resolveActionPermissionForDocumentParsing({
+      shipmentId: parsed.shipmentId,
+      requireEdit: true,
+    });
+
+    const overrideFields = String(parsed.overrideFields ?? "")
+      .split(",")
+      .map((field) => field.trim())
+      .filter((field): field is ParsedShipmentFieldKey => Boolean(field));
+
+    const applyResult = await applyParsedDocumentToShipment({
+      companyId: ctx.companyId,
+      userId: ctx.userId,
+      parsingResultId: parsed.parsingResultId,
+      strategy: parsed.strategy ?? "ONLY_EMPTY",
+      confirmedOverrideFields: overrideFields,
+    });
+
+    if (applyResult.shipmentId !== shipment.id) {
+      throw new Error("Parsing result does not belong to this shipment");
+    }
+
+    revalidatePath(`/shipments/${shipment.id}`);
+    revalidatePath("/shipments");
+    return { success: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return { success: false, error: message };
+  }
+}
+
+export async function applyDocumentParsingDirectAction(formData: FormData): Promise<void> {
+  const result = await applyDocumentParsingAction({ success: false }, formData);
+  if (!result.success) {
+    throw new Error(result.error ?? "Unable to apply parsed document data");
+  }
+}
+
 export async function upsertShipmentDocumentAction(
   _prevState: ShipmentActionState,
   formData: FormData,
 ): Promise<ShipmentActionState> {
   try {
     const ctx = await getContext("SHIPMENTS", "EDIT");
+    const file = formData.get("file");
+    if (!(file instanceof File) || file.size <= 0) {
+      throw new Error("Document file is required");
+    }
+
     const parsed = shipmentDocumentSchema.parse({
-      id: formData.get("id") || undefined,
+      replaceOfId: formData.get("replaceOfId") || undefined,
       shipmentId: formData.get("shipmentId"),
       docType: parseDocumentType(formData.get("docType")),
-      fileName: formData.get("fileName"),
       referenceNumber: formData.get("referenceNumber") || undefined,
       issueDate: String(formData.get("issueDate") || ""),
-      version: formData.get("version") || undefined,
-      status: parseDocumentStatus(formData.get("status")),
+      status: parseDocumentStatus(formData.get("status") ?? DocumentRecordStatus.PENDING),
       notes: formData.get("notes") || undefined,
     });
 
     const shipment = await assertShipmentAccess(ctx.companyId, parsed.shipmentId);
     const issueDate = toDate(parsed.issueDate);
-    const payload: {
-      shipmentId: string;
-      docType: DocumentType;
-      fileName: string;
-      referenceNumber: string | null;
-      issueDate: Date | null;
-      version: number;
-      status: DocumentRecordStatus;
-      notes: string | null;
-      uploadedById: string;
-    } = {
-      shipmentId: shipment.id,
-      docType: parsed.docType,
-      fileName: parsed.fileName.trim(),
-      referenceNumber: normalizeOptional(parsed.referenceNumber),
-      issueDate,
-      version: parsed.version ?? 1,
-      status: parsed.status,
-      notes: normalizeOptional(parsed.notes),
-      uploadedById: ctx.userId,
-    };
 
-    if (parsed.id) {
+    if (parsed.replaceOfId) {
       const existing = await prisma.shipmentDocument.findFirst({
         where: {
-          id: parsed.id,
+          id: parsed.replaceOfId,
           shipment: { companyId: ctx.companyId },
         },
-        select: { id: true },
+        select: { id: true, shipmentId: true, docType: true },
       });
       if (!existing) {
         throw new Error("Document not found");
       }
-      await prisma.shipmentDocument.update({
-        where: { id: existing.id },
-        data: payload,
-      });
-    } else {
-      await prisma.shipmentDocument.create({ data: payload });
+      if (existing.shipmentId !== shipment.id) {
+        throw new Error("Document does not belong to this shipment");
+      }
+      if (existing.docType !== parsed.docType) {
+        throw new Error("Replacement document must keep the same type");
+      }
     }
 
+    const fileMeta = await persistShipmentDocumentFile({ shipmentId: shipment.id, file });
+    const latestVersion = await prisma.shipmentDocument.aggregate({
+      where: {
+        shipmentId: shipment.id,
+        docType: parsed.docType,
+      },
+      _max: { version: true },
+    });
+
+    await prisma.shipmentDocument.create({
+      data: {
+        shipmentId: shipment.id,
+        docType: parsed.docType,
+        fileName: fileMeta.fileName,
+        fileUrl: fileMeta.fileUrl,
+        referenceNumber: normalizeOptional(parsed.referenceNumber),
+        issueDate,
+        version: (latestVersion._max.version ?? 0) + 1,
+        status: parsed.status ?? DocumentRecordStatus.PENDING,
+        notes: normalizeOptional(parsed.notes),
+        uploadedById: ctx.userId,
+      },
+    });
+
+    await runAlertChecksForShipmentUpdate({
+      companyId: ctx.companyId,
+      shipmentId: shipment.id,
+    });
     revalidatePath(`/shipments/${shipment.id}`);
     revalidatePath("/shipments");
     return { success: true };
@@ -1034,6 +1275,20 @@ export async function upsertShipmentDocumentDirectAction(formData: FormData): Pr
   const result = await upsertShipmentDocumentAction({ success: false }, formData);
   if (!result.success) {
     throw new Error(result.error ?? "Unable to save shipment document");
+  }
+}
+
+export async function uploadShipmentDocumentDirectAction(formData: FormData): Promise<void> {
+  const result = await upsertShipmentDocumentAction({ success: false }, formData);
+  if (!result.success) {
+    throw new Error(result.error ?? "Unable to upload shipment document");
+  }
+}
+
+export async function replaceShipmentDocumentDirectAction(formData: FormData): Promise<void> {
+  const result = await upsertShipmentDocumentAction({ success: false }, formData);
+  if (!result.success) {
+    throw new Error(result.error ?? "Unable to replace shipment document");
   }
 }
 
@@ -1063,6 +1318,10 @@ export async function deleteShipmentDocumentAction(
     }
 
     await prisma.shipmentDocument.delete({ where: { id: existing.id } });
+    await runAlertChecksForShipmentUpdate({
+      companyId: ctx.companyId,
+      shipmentId: existing.shipmentId,
+    });
     revalidatePath(`/shipments/${existing.shipmentId}`);
     revalidatePath("/shipments");
     return { success: true };
@@ -1477,6 +1736,11 @@ export async function createInvoiceAction(
       },
     });
 
+    await runAlertChecksForInvoiceMutation({
+      companyId: ctx.companyId,
+      shipmentId: parsed.shipmentId,
+    });
+
     revalidatePath(`/shipments/${parsed.shipmentId}`);
     revalidatePath(`/finance/invoices/${created.id}`);
     revalidatePath("/finance/invoices");
@@ -1535,6 +1799,11 @@ export async function upsertInvoiceAction(
         notes: parsed.notes,
       });
     }
+
+    await runAlertChecksForInvoiceMutation({
+      companyId: ctx.companyId,
+      shipmentId: parsed.shipmentId,
+    });
 
     revalidatePath(`/shipments/${parsed.shipmentId}`);
     revalidatePath(`/finance/invoices/${parsed.id}`);
@@ -1606,6 +1875,11 @@ export async function markInvoicePaidAction(
       invoiceId: id,
     });
 
+    await runAlertChecksForInvoiceMutation({
+      companyId: ctx.companyId,
+      shipmentId: updated.shipmentId,
+    });
+
     revalidatePath(`/shipments/${updated.shipmentId}`);
     revalidatePath(`/finance/invoices/${updated.id}`);
     revalidatePath("/finance/invoices");
@@ -1641,6 +1915,11 @@ export async function cancelInvoiceAction(
       invoiceId: id,
     });
 
+    await runAlertChecksForInvoiceMutation({
+      companyId: ctx.companyId,
+      shipmentId: updated.shipmentId,
+    });
+
     revalidatePath(`/shipments/${updated.shipmentId}`);
     revalidatePath(`/finance/invoices/${updated.id}`);
     revalidatePath("/finance/invoices");
@@ -1674,6 +1953,11 @@ export async function deleteInvoiceAction(
     const deleted = await deleteInvoice({
       companyId: ctx.companyId,
       invoiceId: id,
+    });
+
+    await runAlertChecksForInvoiceMutation({
+      companyId: ctx.companyId,
+      shipmentId: deleted.shipmentId,
     });
 
     revalidatePath(`/shipments/${deleted.shipmentId}`);
@@ -1728,36 +2012,113 @@ export async function upsertMilestoneAction(
     const normalizedNotes = normalizeOptional(parsed.notes);
     const status = parsed.status ?? (actualAt ? MilestoneStatus.COMPLETED : MilestoneStatus.PENDING);
 
-    await prisma.shipmentMilestone.upsert({
+    const currentMilestones = await prisma.shipmentMilestone.findMany({
       where: {
-        shipmentId_code: {
+        shipmentId: shipment.id,
+      },
+      select: {
+        code: true,
+        status: true,
+        actualAt: true,
+      },
+    });
+
+    const sequenceValidation = validateMilestoneCompletionSequence({
+      targetCode: parsed.code,
+      targetStatus: status,
+      targetActualAt: actualAt,
+      milestones: currentMilestones,
+      autoCompleteMissing: AUTO_COMPLETE_MISSING_SEQUENCE_MILESTONES,
+    });
+
+    await prisma.$transaction(async (tx) => {
+      if (sequenceValidation.autoCompleteCodes.length > 0) {
+        for (const code of sequenceValidation.autoCompleteCodes) {
+          await tx.shipmentMilestone.updateMany({
+            where: {
+              shipmentId: shipment.id,
+              code,
+            },
+            data: {
+              status: MilestoneStatus.COMPLETED,
+            },
+          });
+        }
+      }
+
+      await tx.shipmentMilestone.upsert({
+        where: {
+          shipmentId_code: {
+            shipmentId: shipment.id,
+            code: parsed.code,
+          },
+        },
+        create: {
           shipmentId: shipment.id,
           code: parsed.code,
+          label: parsed.label,
+          expectedAt,
+          actualAt,
+          status,
+          comment: normalizedNotes,
+          isCritical: defaultMilestones.some((m) => m.code === parsed.code && m.isCritical),
         },
-      },
-      create: {
-        shipmentId: shipment.id,
-        code: parsed.code,
-        label: parsed.label,
-        expectedAt,
-        actualAt,
-        status,
-        comment: normalizedNotes,
-        isCritical: defaultMilestones.some((m) => m.code === parsed.code && m.isCritical),
-      },
-      update: {
-        label: parsed.label,
-        expectedAt,
-        actualAt,
-        status,
-        comment: normalizedNotes,
-      },
+        update: {
+          label: parsed.label,
+          expectedAt,
+          actualAt,
+          status,
+          comment: normalizedNotes,
+        },
+      });
+    });
+
+    const syncResult = await syncShipmentStatusFromMilestones({
+      companyId: ctx.companyId,
+      shipmentId: shipment.id,
+    });
+
+    if (syncResult.statusChanged || syncResult.datesChanged || syncResult.milestoneStatusesChanged) {
+      await prisma.activityLog.create({
+        data: {
+          companyId: ctx.companyId,
+          entityType: "SHIPMENT",
+          entityId: shipment.id,
+          action: "UPDATE",
+          actorId: ctx.userId,
+          beforeJson: {
+            previousStatus: syncResult.previousStatus,
+          },
+          afterJson: {
+            nextStatus: syncResult.nextStatus,
+            statusChanged: syncResult.statusChanged,
+            datesChanged: syncResult.datesChanged,
+            milestoneStatusesChanged: syncResult.milestoneStatusesChanged,
+            source: "MILESTONE_UPDATE",
+            milestoneCode: parsed.code,
+          },
+        },
+      });
+    }
+
+    await runAlertChecksForShipmentUpdate({
+      companyId: ctx.companyId,
+      shipmentId: shipment.id,
     });
 
     revalidatePath(`/shipments/${shipment.id}`);
     revalidatePath("/shipments");
+    revalidatePath("/dashboard");
+    revalidatePath("/dashboard/action-center");
     return { success: true };
   } catch (error) {
+    if (error instanceof MilestoneSequenceError) {
+      return {
+        success: false,
+        errorCode: error.code,
+        error: error.message,
+      };
+    }
     const message = error instanceof Error ? error.message : "Unknown error";
     return { success: false, error: message };
   }

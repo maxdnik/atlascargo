@@ -5,15 +5,18 @@ import { useActionState, useMemo, useState } from "react";
 import {
   AlertTriangle,
   ArrowRight,
+  ChevronDown,
   CheckCircle2,
   CircleDot,
   Clock3,
   Plane,
+  ScrollText,
   ShipWheel,
   Truck,
 } from "lucide-react";
 import {
   DocumentRecordStatus,
+  DocumentParsingStatus,
   FinancialRecordStatus,
   InvoiceLineType,
   InvoiceStatus,
@@ -22,17 +25,12 @@ import {
   ShipmentCostStatus,
   ShipmentStatus,
 } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
 
 import type { ShipmentActionState } from "@/app/(dashboard)/shipments/actions";
-import {
-  cancelFinanceInvoiceAction,
-  createFinanceInvoiceAction,
-  deleteFinanceInvoiceAction,
-  issueFinanceInvoiceAfipAction,
-  markFinanceInvoicePaidAction,
-  updateFinanceInvoiceAction,
-} from "@/app/(dashboard)/finance/actions";
 import { MilestoneTimeline } from "@/components/shipments/milestone-timeline";
+import { getStatusLabel } from "@/lib/shipment-state";
+import { SHIPMENT_STAGE_SEQUENCE } from "@/lib/domain/derive-shipment-state";
 import { ShipmentForm } from "@/components/shipments/shipment-form";
 
 type ShipmentDetailViewModel = {
@@ -47,6 +45,14 @@ type ShipmentDetailViewModel = {
   referenceInternal?: string | null;
   shipmentNumber: string;
   status: string;
+  derivedState: {
+    masterStatus: string;
+    currentStage: string;
+    lastCompletedMilestone: string | null;
+    nextExpectedMilestone: string | null;
+    delayedMilestones: string[];
+    isDelayed: boolean;
+  };
   mode: string;
   direction: string;
   customerName: string;
@@ -114,11 +120,19 @@ type ShipmentDetailViewModel = {
     id: string;
     docType: string;
     fileName: string;
+    fileUrl: string;
+    uploadedAt: string;
     referenceNumber?: string | null;
     issueDate?: string | null;
     version: number;
     status: DocumentRecordStatus;
     notes?: string | null;
+    parsingResults: Array<{
+      id: string;
+      status: DocumentParsingStatus;
+      createdAt: string;
+      parsedJson: Prisma.JsonValue | null;
+    }>;
   }>;
   revenues: Array<{
     id: string;
@@ -207,7 +221,10 @@ type Props = {
       formData: FormData,
     ) => Promise<ShipmentActionState>;
     deleteShipmentDocumentDirectAction: (formData: FormData) => Promise<void>;
-    upsertShipmentDocumentDirectAction: (formData: FormData) => Promise<void>;
+    uploadShipmentDocumentDirectAction: (formData: FormData) => Promise<void>;
+    replaceShipmentDocumentDirectAction: (formData: FormData) => Promise<void>;
+    triggerDocumentParsingDirectAction: (formData: FormData) => Promise<void>;
+    applyDocumentParsingDirectAction: (formData: FormData) => Promise<void>;
     deleteRevenueDirectAction: (formData: FormData) => Promise<void>;
     upsertRevenueDirectAction: (formData: FormData) => Promise<void>;
     deleteExpenseDirectAction: (formData: FormData) => Promise<void>;
@@ -223,12 +240,28 @@ type Props = {
   };
 };
 
-function statusLabel(status: string) {
-  return status
-    .toLowerCase()
-    .split("_")
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
+type ParsingViewModel = {
+  id: string;
+  status: DocumentParsingStatus;
+  createdAt: string;
+  parsedJson: Record<string, string | number | null> | null;
+  conflictFields: Array<ParsingFieldKey>;
+};
+
+type ParsingFieldKey =
+  | "shipperName"
+  | "consigneeName"
+  | "notifyPartyName"
+  | "grossWeightKg"
+  | "packageCount"
+  | "houseRef"
+  | "masterRef"
+  | "originCode"
+  | "destinationCode"
+  | "vesselOrFlight";
+
+function isStrictStageCode(code: string): code is (typeof SHIPMENT_STAGE_SEQUENCE)[number] {
+  return SHIPMENT_STAGE_SEQUENCE.includes(code as (typeof SHIPMENT_STAGE_SEQUENCE)[number]);
 }
 
 function shipmentStatusClass(status: string) {
@@ -237,6 +270,13 @@ function shipmentStatusClass(status: string) {
   if (status === "IN_TRANSIT" || status === "ARRIVED") return "bg-sky-100 text-sky-700";
   if (status === "CANCELLED") return "bg-rose-100 text-rose-700";
   return "bg-slate-100 text-slate-700";
+}
+
+function tabLabel(tab: "documents" | "revenue" | "costs" | "invoices") {
+  if (tab === "documents") return "Documents";
+  if (tab === "revenue") return "Revenue";
+  if (tab === "costs") return "Costs";
+  return "Invoices";
 }
 
 function money(value: number) {
@@ -255,6 +295,20 @@ function dateLabel(value?: string | Date | null, withTime = false) {
   if (!value) return "-";
   const parsed = new Date(value);
   return withTime ? parsed.toLocaleString() : parsed.toLocaleDateString();
+}
+
+function normalizeParsedJsonForPreview(
+  value: Prisma.JsonValue,
+): Record<string, string | number | null> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const source = value as Record<string, unknown>;
+  const normalized: Record<string, string | number | null> = {};
+  for (const [key, fieldValue] of Object.entries(source)) {
+    if (typeof fieldValue === "string" || typeof fieldValue === "number" || fieldValue === null) {
+      normalized[key] = fieldValue;
+    }
+  }
+  return normalized;
 }
 
 function modeIcon(mode: string) {
@@ -302,6 +356,49 @@ const docStatusClass: Record<DocumentRecordStatus, string> = {
   RECEIVED: "bg-sky-100 text-sky-700",
   VERIFIED: "bg-emerald-100 text-emerald-700",
 };
+
+const parsingStatusClass: Record<DocumentParsingStatus, string> = {
+  PENDING: "bg-amber-100 text-amber-800",
+  PARSED: "bg-emerald-100 text-emerald-700",
+  REVIEW_REQUIRED: "bg-violet-100 text-violet-700",
+  FAILED: "bg-rose-100 text-rose-700",
+};
+
+const documentTypeOptions = [
+  "BL",
+  "AWB",
+  "COMMERCIAL_INVOICE",
+  "SUPPLIER_INVOICE",
+  "PACKING_LIST",
+  "CUSTOMS_DOC",
+  "OTHER",
+] as const;
+
+type ShipmentDocumentType = (typeof documentTypeOptions)[number];
+const documentTypeLabel: Record<ShipmentDocumentType, string> = {
+  BL: "BL",
+  AWB: "AWB",
+  COMMERCIAL_INVOICE: "Commercial invoice",
+  SUPPLIER_INVOICE: "Supplier invoice",
+  PACKING_LIST: "Packing list",
+  CUSTOMS_DOC: "Customs document",
+  OTHER: "Other",
+};
+
+function getDocumentTypeLabel(docType: string) {
+  if (docType in documentTypeLabel) {
+    return documentTypeLabel[docType as ShipmentDocumentType];
+  }
+  return docType;
+}
+
+const documentGroupDefinitions: Array<{ key: string; label: string; types: ShipmentDocumentType[] }> = [
+  { key: "bl_awb", label: "BL / AWB", types: ["BL", "AWB"] },
+  { key: "invoices", label: "Invoices", types: ["COMMERCIAL_INVOICE", "SUPPLIER_INVOICE"] },
+  { key: "packing", label: "Packing list", types: ["PACKING_LIST"] },
+  { key: "customs", label: "Customs", types: ["CUSTOMS_DOC"] },
+  { key: "other", label: "Other", types: ["OTHER"] },
+];
 
 const financeStatusClass: Record<FinancialRecordStatus, string> = {
   PENDING: "bg-amber-100 text-amber-800",
@@ -354,9 +451,6 @@ export function ShipmentDetailClient({
     canEditRevenue,
     canDeleteRevenue,
     canViewExpenses,
-    canCreateExpenses,
-    canEditExpenses,
-    canDeleteExpenses,
     canCreateShipmentCosts,
     canEditShipmentCosts,
     canDeleteShipmentCosts,
@@ -368,7 +462,10 @@ export function ShipmentDetailClient({
   const {
     updateShipmentAction,
     deleteShipmentDocumentDirectAction: deleteDocumentAction,
-    upsertShipmentDocumentDirectAction: upsertDocumentAction,
+    uploadShipmentDocumentDirectAction: uploadDocumentAction,
+    replaceShipmentDocumentDirectAction: replaceDocumentAction,
+    triggerDocumentParsingDirectAction: triggerDocumentParsingAction,
+    applyDocumentParsingDirectAction: applyDocumentParsingAction,
     deleteRevenueDirectAction: deleteRevenueAction,
     upsertRevenueDirectAction: upsertRevenueAction,
     deleteShipmentCostDirectAction: deleteShipmentCostAction,
@@ -390,6 +487,7 @@ export function ShipmentDetailClient({
   const [activeTab, setActiveTab] = useState<"documents" | "revenue" | "costs" | "invoices">(
     defaultTab,
   );
+  const [operationalRecordsExpanded, setOperationalRecordsExpanded] = useState(false);
   const [invoiceCreateState] = useActionState<ShipmentActionState, FormData>(
     async (_state, formData) => {
       try {
@@ -404,17 +502,216 @@ export function ShipmentDetailClient({
     },
     invoiceInitialState,
   );
+  const [documentParseState] = useActionState<ShipmentActionState, FormData>(
+    async (_state, formData) => {
+      try {
+        await triggerDocumentParsingAction(formData);
+        return { success: true };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : "Unable to parse document",
+        };
+      }
+    },
+    invoiceInitialState,
+  );
+  const [documentApplyState] = useActionState<ShipmentActionState, FormData>(
+    async (_state, formData) => {
+      try {
+        await applyDocumentParsingAction(formData);
+        return { success: true };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : "Unable to apply parsed data",
+        };
+      }
+    },
+    invoiceInitialState,
+  );
+  const derivedState = shipment.derivedState;
+  const delayedMilestoneSet = useMemo(
+    () => new Set(derivedState.delayedMilestones),
+    [derivedState.delayedMilestones],
+  );
+  const lastCompletedIndex = useMemo(() => {
+    if (!derivedState.lastCompletedMilestone) return -1;
+    if (!isStrictStageCode(derivedState.lastCompletedMilestone)) return -1;
+    return SHIPMENT_STAGE_SEQUENCE.indexOf(derivedState.lastCompletedMilestone);
+  }, [derivedState.lastCompletedMilestone]);
+  const progressPercent = useMemo(() => {
+    if (derivedState.masterStatus === "CLOSED") return 100;
+    if (lastCompletedIndex < 0) return 0;
+    return Math.round(((lastCompletedIndex + 1) / SHIPMENT_STAGE_SEQUENCE.length) * 100);
+  }, [derivedState.masterStatus, lastCompletedIndex]);
   const timeline = useMemo(() => {
     return shipment.milestones.map((m, index) => ({
       ...m,
-      isCurrent: m.status === "IN_PROGRESS",
-      isDone: m.status === "COMPLETED",
+      status: (() => {
+        const stageIndex = SHIPMENT_STAGE_SEQUENCE.indexOf(m.code as (typeof SHIPMENT_STAGE_SEQUENCE)[number]);
+        if (stageIndex === -1) {
+          return m.status;
+        }
+        if (stageIndex <= lastCompletedIndex) {
+          return MilestoneStatus.COMPLETED;
+        }
+        if (delayedMilestoneSet.has(m.code)) {
+          return MilestoneStatus.DELAYED;
+        }
+        if (derivedState.nextExpectedMilestone === m.code) {
+          return MilestoneStatus.IN_PROGRESS;
+        }
+        return MilestoneStatus.PENDING;
+      })(),
+      isCurrent:
+        derivedState.nextExpectedMilestone === m.code &&
+        !delayedMilestoneSet.has(m.code) &&
+        SHIPMENT_STAGE_SEQUENCE.indexOf(m.code as (typeof SHIPMENT_STAGE_SEQUENCE)[number]) !== -1,
+      isDone:
+        SHIPMENT_STAGE_SEQUENCE.indexOf(m.code as (typeof SHIPMENT_STAGE_SEQUENCE)[number]) !== -1 &&
+        SHIPMENT_STAGE_SEQUENCE.indexOf(m.code as (typeof SHIPMENT_STAGE_SEQUENCE)[number]) <=
+          lastCompletedIndex,
       isLast: index === shipment.milestones.length - 1,
     }));
-  }, [shipment.milestones]);
+  }, [
+    delayedMilestoneSet,
+    derivedState.nextExpectedMilestone,
+    lastCompletedIndex,
+    shipment.milestones,
+  ]);
+  const timelineStatusByCode = useMemo(
+    () => new Map(timeline.map((milestone) => [milestone.code, milestone.status])),
+    [timeline],
+  );
+  const milestoneUiHints = useMemo(() => {
+    return Object.fromEntries(
+      shipment.milestones.map((milestone) => {
+        const stageIndex = SHIPMENT_STAGE_SEQUENCE.indexOf(
+          milestone.code as (typeof SHIPMENT_STAGE_SEQUENCE)[number],
+        );
+        if (stageIndex === -1) {
+          return [
+            milestone.code,
+            {
+              canComplete: true,
+              blockedReason: null,
+            },
+          ] as const;
+        }
+        if (stageIndex <= lastCompletedIndex) {
+          return [
+            milestone.code,
+            {
+              canComplete: true,
+              blockedReason: null,
+            },
+          ] as const;
+        }
+        if (derivedState.nextExpectedMilestone === milestone.code) {
+          return [
+            milestone.code,
+            {
+              canComplete: true,
+              blockedReason: null,
+            },
+          ] as const;
+        }
+        if (derivedState.nextExpectedMilestone) {
+          return [
+            milestone.code,
+            {
+              canComplete: false,
+              blockedReason: `Complete ${derivedState.nextExpectedMilestone} first`,
+            },
+          ] as const;
+        }
+        return [
+          milestone.code,
+          {
+            canComplete: false,
+            blockedReason: "No further milestone can be completed yet",
+          },
+        ] as const;
+      }),
+    ) as Record<string, { canComplete: boolean; blockedReason: string | null }>;
+  }, [derivedState.nextExpectedMilestone, lastCompletedIndex, shipment.milestones]);
+  const normalizedDocuments = useMemo(
+    () =>
+      shipment.documents.map((doc) => ({
+        ...doc,
+        docType: doc.docType as ShipmentDocumentType,
+      })),
+    [shipment.documents],
+  );
+  const missingCriticalDocumentLabels = useMemo(() => {
+    const hasBlOrAwb = normalizedDocuments.some((doc) => doc.docType === "BL" || doc.docType === "AWB");
+    const hasCommercialInvoice = normalizedDocuments.some(
+      (doc) => doc.docType === "COMMERCIAL_INVOICE",
+    );
+
+    return [
+      !hasBlOrAwb ? "BL / AWB" : null,
+      !hasCommercialInvoice ? "Commercial invoice" : null,
+    ].filter((label): label is string => Boolean(label));
+  }, [normalizedDocuments]);
+  const groupedDocuments = useMemo(() => {
+    const groups: Record<string, ShipmentDetailViewModel["documents"]> = {};
+    for (const group of documentGroupDefinitions) {
+      groups[group.key] = normalizedDocuments
+        .filter((doc) => group.types.includes(doc.docType))
+        .sort((a, b) => b.version - a.version || b.uploadedAt.localeCompare(a.uploadedAt));
+    }
+    return groups;
+  }, [normalizedDocuments]);
+  const latestParsingByDocumentId = useMemo(() => {
+    const map = new Map<string, ParsingViewModel>();
+    for (const doc of normalizedDocuments) {
+      const latest = [...doc.parsingResults].sort(
+        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+      )[0];
+      if (!latest) continue;
+      const rawJson =
+        latest.parsedJson && typeof latest.parsedJson === "object" && !Array.isArray(latest.parsedJson)
+          ? (latest.parsedJson as Record<string, unknown>)
+          : null;
+      const parsedJson = normalizeParsedJsonForPreview(latest.parsedJson);
+      const conflictFields = Array.isArray(rawJson?.conflicts)
+        ? (((rawJson.conflicts as Array<{ field?: unknown }>) ?? [])
+            .map((entry) => String(entry.field ?? "").trim())
+            .filter(Boolean) as Array<ParsingFieldKey>)
+        : [];
+      map.set(doc.id, {
+        id: latest.id,
+        status: latest.status,
+        createdAt: latest.createdAt,
+        parsedJson,
+        conflictFields,
+      });
+    }
+    return map;
+  }, [normalizedDocuments]);
+
+  const blockedCount = Object.values(milestoneUiHints).filter((hint) => !hint.canComplete).length;
+  const nextAllowedCode = Object.entries(milestoneUiHints).find(
+    ([, hint]) => hint.canComplete,
+  )?.[0];
 
   const routeLabel = `${shipment.originCode ?? "-"} → ${shipment.destinationCode ?? "-"}`;
-  const shipmentReadyForBilling = shipment.status === ShipmentStatus.CLOSED;
+  const shipmentReadyForBilling = derivedState.masterStatus === ShipmentStatus.CLOSED;
+  const operationalRecordCount =
+    shipment.documents.length +
+    shipment.invoices.length +
+    shipment.revenues.length +
+    shipment.shipmentCosts.length;
+  const activeRecordCount =
+    activeTab === "documents"
+      ? shipment.documents.length
+      : activeTab === "revenue"
+        ? shipment.revenues.length
+        : activeTab === "costs"
+          ? shipment.shipmentCosts.length
+          : shipment.invoices.length;
 
   return (
     <div className="space-y-5">
@@ -441,9 +738,9 @@ export function ShipmentDetailClient({
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <span
-              className={`inline-flex rounded-full px-3 py-1.5 text-sm font-semibold ${shipmentStatusClass(shipment.status)}`}
+              className={`inline-flex rounded-full px-3 py-1.5 text-sm font-semibold ${shipmentStatusClass(derivedState.masterStatus)}`}
             >
-              {statusLabel(shipment.status)}
+              {getStatusLabel(derivedState.masterStatus)}
             </span>
             {shipment.quoteNumber ? (
               <span className="inline-flex rounded-full bg-indigo-100 px-3 py-1.5 text-sm font-semibold text-indigo-700">
@@ -468,6 +765,36 @@ export function ShipmentDetailClient({
           <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
             <p className="text-xs text-slate-500">Delivered</p>
             <p className="mt-1 text-sm font-semibold text-slate-900">{dateLabel(shipment.deliveredAt, true)}</p>
+          </div>
+        </div>
+        <div className="mt-3 grid gap-3 md:grid-cols-4">
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+            <p className="text-xs text-slate-500">Current stage</p>
+            <p className="mt-1 text-sm font-semibold text-slate-900">
+              {getStatusLabel(derivedState.currentStage)}
+            </p>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+            <p className="text-xs text-slate-500">Next milestone</p>
+            <p className="mt-1 text-sm font-semibold text-slate-900">
+              {derivedState.nextExpectedMilestone
+                ? getStatusLabel(derivedState.nextExpectedMilestone)
+                : "None"}
+            </p>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+            <p className="text-xs text-slate-500">Progress</p>
+            <p className="mt-1 text-sm font-semibold text-slate-900">{progressPercent}%</p>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+            <p className="text-xs text-slate-500">Operational issue</p>
+            <p
+              className={`mt-1 text-sm font-semibold ${
+                derivedState.isDelayed ? "text-amber-700" : "text-emerald-700"
+              }`}
+            >
+              {derivedState.isDelayed ? "Needs attention" : "No issues"}
+            </p>
           </div>
         </div>
       </section>
@@ -677,8 +1004,33 @@ export function ShipmentDetailClient({
             </Card>
           ) : null}
 
-          <Card title="Operational records">
-            <div className="mb-3 flex gap-2">
+          <Card title="Operational records" subtitle="Secondary documents, revenue, costs and invoices">
+            <div className="mb-3 flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+              <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-600">
+                <ScrollText className="h-3.5 w-3.5" />
+                <span>Operational Records</span>
+                <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
+                  {operationalRecordCount}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setOperationalRecordsExpanded((current) => !current)}
+                aria-expanded={operationalRecordsExpanded}
+                className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 transition hover:bg-slate-100"
+              >
+                {operationalRecordsExpanded ? "Collapse" : "Expand"}
+                <ChevronDown
+                  className={`h-3.5 w-3.5 transition-transform ${
+                    operationalRecordsExpanded ? "rotate-180" : "rotate-0"
+                  }`}
+                />
+              </button>
+            </div>
+
+            {operationalRecordsExpanded ? (
+              <div className="space-y-3">
+                <div className="mb-2 flex flex-wrap gap-2">
               {canViewDocuments ? (
                 <button
                   type="button"
@@ -727,9 +1079,10 @@ export function ShipmentDetailClient({
                   Invoices
                 </button>
               ) : null}
-            </div>
+                </div>
 
-            {activeTab === "invoices" && (canCreateInvoices || canEditInvoices || canDeleteInvoices) ? (
+                <div className="max-h-[360px] space-y-3 overflow-y-auto pr-1">
+                  {activeTab === "invoices" && (canCreateInvoices || canEditInvoices || canDeleteInvoices) ? (
               <div className="mb-4 space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
                 <div className="flex items-center justify-between gap-2">
                   <div>
@@ -831,95 +1184,256 @@ export function ShipmentDetailClient({
               </div>
             ) : null}
 
-            {activeTab === "documents" && canViewDocuments ? (
-              <div className="space-y-3">
-                {shipment.documents.length === 0 ? (
-                  <Empty label="No documents registered yet." />
+                  {activeTab === "documents" && canViewDocuments ? (
+              <div className="space-y-4">
+                {missingCriticalDocumentLabels.length > 0 ? (
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                    <p className="font-semibold">Missing critical docs</p>
+                    <p className="mt-1">This shipment still needs: {missingCriticalDocumentLabels.join(", ")}.</p>
+                  </div>
                 ) : (
-                  shipment.documents.map((doc) => (
-                    <div key={doc.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="space-y-0.5">
-                          <p className="text-sm font-semibold text-slate-900">{doc.fileName}</p>
-                          <p className="text-xs text-slate-600">{doc.docType}</p>
-                        </div>
-                        {statusPill(doc.status, docStatusClass)}
-                      </div>
-                      <div className="mt-2 text-xs text-slate-600">
-                        <p>Ref: {doc.referenceNumber ?? "-"}</p>
-                        <p>Issue: {dateLabel(doc.issueDate)}</p>
-                        <p>Version: {doc.version}</p>
-                      </div>
-                      {canDeleteDocuments ? (
-                        <form action={deleteDocumentAction} className="mt-2">
-                          <input type="hidden" name="id" value={doc.id} />
-                          <button
-                            className="text-xs font-medium text-rose-700 transition hover:underline"
-                            type="submit"
-                          >
-                            Delete
-                          </button>
-                        </form>
-                      ) : null}
-                    </div>
-                  ))
+                  <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
+                    Critical documents are complete.
+                  </div>
                 )}
 
+                <div className="grid gap-3 xl:grid-cols-2">
+                  {documentGroupDefinitions.map((group) => {
+                    const docsInGroup = groupedDocuments[group.key];
+                    return (
+                      <div key={group.key} className="rounded-xl border border-slate-200 bg-slate-50/70 p-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <h4 className="text-sm font-semibold text-slate-900">{group.label}</h4>
+                          <span className="rounded-full bg-slate-200 px-2 py-0.5 text-xs font-medium text-slate-700">
+                            {docsInGroup.length}
+                          </span>
+                        </div>
+                        <div className="mt-3 space-y-2">
+                          {docsInGroup.length === 0 ? (
+                            <p className="text-xs text-slate-500">No documents yet.</p>
+                          ) : (
+                            docsInGroup.map((doc) => {
+                              const latestParsing = latestParsingByDocumentId.get(doc.id);
+                              return (
+                                <div key={doc.id} className="rounded-lg border border-slate-200 bg-white p-2.5">
+                                  <div className="flex items-start justify-between gap-2">
+                                    <div>
+                                      <p className="text-sm font-semibold text-slate-900">{doc.fileName}</p>
+                                      <p className="text-xs text-slate-600">
+                                        {getDocumentTypeLabel(doc.docType)} · v{doc.version}
+                                      </p>
+                                    </div>
+                                    {statusPill(doc.status, docStatusClass)}
+                                  </div>
+                                  <div className="mt-2 text-xs text-slate-600">
+                                    <p>Uploaded: {dateLabel(doc.uploadedAt, true)}</p>
+                                    <p>Issue: {dateLabel(doc.issueDate)}</p>
+                                    <p>Ref: {doc.referenceNumber ?? "-"}</p>
+                                  </div>
+                                  {latestParsing ? (
+                                    <div
+                                      className={`mt-2 rounded-md border px-2 py-1 text-xs ${parsingStatusClass[latestParsing.status]}`}
+                                    >
+                                      Parse: {latestParsing.status} · {dateLabel(latestParsing.createdAt, true)}
+                                    </div>
+                                  ) : (
+                                    <p className="mt-2 text-xs text-slate-500">Parse: Not parsed yet.</p>
+                                  )}
+                                  {latestParsing?.parsedJson ? (
+                                    <div className="mt-2 rounded-md border border-slate-200 bg-slate-50 px-2 py-2 text-xs">
+                                      <p className="font-semibold text-slate-700">Parsed fields preview</p>
+                                      <p className="mt-1 text-slate-600">
+                                        {Object.entries(latestParsing.parsedJson)
+                                          .filter(([, value]) => value !== null && value !== "")
+                                          .slice(0, 4)
+                                          .map(([key, value]) => `${key}: ${String(value)}`)
+                                          .join(" · ") || "No extracted values."}
+                                      </p>
+                                    </div>
+                                  ) : null}
+                                  <div className="mt-2 flex flex-wrap items-center gap-3 text-xs">
+                                    <a
+                                      href={doc.fileUrl}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="font-medium text-sky-700 transition hover:underline"
+                                    >
+                                      View
+                                    </a>
+                                    <a
+                                      href={doc.fileUrl}
+                                      download
+                                      className="font-medium text-sky-700 transition hover:underline"
+                                    >
+                                      Download
+                                    </a>
+                                    <form action={triggerDocumentParsingAction}>
+                                      <input type="hidden" name="shipmentId" value={shipment.id} />
+                                      <input type="hidden" name="shipmentDocumentId" value={doc.id} />
+                                      <button
+                                        type="submit"
+                                        className="font-medium text-indigo-700 transition hover:underline"
+                                      >
+                                        Parse document
+                                      </button>
+                                    </form>
+                                    {latestParsing ? (
+                                      <form action={applyDocumentParsingAction}>
+                                        <input type="hidden" name="shipmentId" value={shipment.id} />
+                                        <input type="hidden" name="parsingResultId" value={latestParsing.id} />
+                                        <input
+                                          type="hidden"
+                                          name="strategy"
+                                          value={latestParsing.status === "REVIEW_REQUIRED" ? "OVERRIDE_CONFLICTS" : "ONLY_EMPTY"}
+                                        />
+                                        {latestParsing.status === "REVIEW_REQUIRED" && latestParsing.conflictFields.length > 0 ? (
+                                          <input
+                                            type="hidden"
+                                            name="overrideFields"
+                                            value={latestParsing.conflictFields.join(",")}
+                                          />
+                                        ) : null}
+                                        <button
+                                          type="submit"
+                                          className="font-medium text-emerald-700 transition hover:underline"
+                                        >
+                                          Apply to shipment
+                                        </button>
+                                      </form>
+                                    ) : null}
+                                    {canDeleteDocuments ? (
+                                      <form action={deleteDocumentAction}>
+                                        <input type="hidden" name="id" value={doc.id} />
+                                        <button
+                                          className="font-medium text-rose-700 transition hover:underline"
+                                          type="submit"
+                                        >
+                                          Delete
+                                        </button>
+                                      </form>
+                                    ) : null}
+                                  </div>
+                                  {latestParsing?.status === "REVIEW_REQUIRED" &&
+                                  latestParsing.conflictFields.length > 0 ? (
+                                    <p className="mt-2 text-xs text-amber-700">
+                                      Conflict review required for fields: {latestParsing.conflictFields.join(", ")}.
+                                      Applying will only override these fields.
+                                    </p>
+                                  ) : null}
+                                </div>
+                              );
+                            })
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {(documentParseState.error && !documentParseState.success) ||
+                (documentApplyState.error && !documentApplyState.success) ? (
+                  <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-800">
+                    {documentParseState.error ?? documentApplyState.error}
+                  </div>
+                ) : null}
+
                 {canCreateDocuments ? (
-                  <form action={upsertDocumentAction} className="space-y-2 rounded-xl border border-slate-200 p-3">
+                  <form
+                    action={uploadDocumentAction}
+                    className="space-y-2 rounded-xl border border-slate-200 bg-white p-3"
+                  >
                     <input type="hidden" name="shipmentId" value={shipment.id} />
-                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Add document</p>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Upload document</p>
                     <select name="docType" required className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm">
-                      {["COMMERCIAL_INVOICE","PACKING_LIST","HBL","MBL","HAWB","MAWB","CERTIFICATE","PERMIT","POD","OTHER"].map((type) => (
-                        <option key={type} value={type}>{type}</option>
+                      {documentTypeOptions.map((type) => (
+                        <option key={type} value={type}>
+                          {documentTypeLabel[type]}
+                        </option>
                       ))}
                     </select>
-                    <input name="fileName" required placeholder="File name" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
-                    <input name="referenceNumber" placeholder="Reference number" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                    <input type="file" name="file" required className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                    <input
+                      name="referenceNumber"
+                      placeholder="Reference number"
+                      className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                    />
                     <input type="date" name="issueDate" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
-                    <input type="number" min={1} name="version" defaultValue={1} className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
                     <select name="status" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm">
-                      {Object.values(DocumentRecordStatus).map((status) => <option key={status} value={status}>{status}</option>)}
+                      {Object.values(DocumentRecordStatus).map((status) => (
+                        <option key={status} value={status}>
+                          {status}
+                        </option>
+                      ))}
                     </select>
-                    <textarea name="notes" rows={2} placeholder="Internal notes" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
-                    <button type="submit" className="rounded-lg bg-sky-600 px-3 py-2 text-xs font-medium text-white transition hover:bg-sky-500">
-                      Save document
+                    <textarea
+                      name="notes"
+                      rows={2}
+                      placeholder="Internal notes"
+                      className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                    />
+                    <button
+                      type="submit"
+                      className="rounded-lg bg-sky-600 px-3 py-2 text-xs font-medium text-white transition hover:bg-sky-500"
+                    >
+                      Upload
                     </button>
                   </form>
                 ) : null}
 
-                {canEditDocuments && shipment.documents.length > 0 ? (
-                  <form action={upsertDocumentAction} className="space-y-2 rounded-xl border border-slate-200 p-3">
+                {canEditDocuments && normalizedDocuments.length > 0 ? (
+                  <form
+                    action={replaceDocumentAction}
+                    className="space-y-2 rounded-xl border border-slate-200 bg-white p-3"
+                  >
                     <input type="hidden" name="shipmentId" value={shipment.id} />
-                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Edit document</p>
-                    <select name="id" required className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm">
-                      <option value="">Select document</option>
-                      {shipment.documents.map((doc) => (
-                        <option key={doc.id} value={doc.id}>{doc.docType} - {doc.fileName}</option>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Replace document</p>
+                    <select name="replaceOfId" required className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm">
+                      <option value="">Select existing document</option>
+                      {normalizedDocuments.map((doc) => (
+                        <option key={doc.id} value={doc.id}>
+                          {getDocumentTypeLabel(doc.docType)} · v{doc.version} · {doc.fileName}
+                        </option>
                       ))}
                     </select>
                     <select name="docType" required className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm">
-                      {["COMMERCIAL_INVOICE","PACKING_LIST","HBL","MBL","HAWB","MAWB","CERTIFICATE","PERMIT","POD","OTHER"].map((type) => (
-                        <option key={type} value={type}>{type}</option>
+                      {documentTypeOptions.map((type) => (
+                        <option key={type} value={type}>
+                          {documentTypeLabel[type]}
+                        </option>
                       ))}
                     </select>
-                    <input name="fileName" required placeholder="File name" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
-                    <input name="referenceNumber" placeholder="Reference number" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                    <input type="file" name="file" required className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                    <input
+                      name="referenceNumber"
+                      placeholder="Reference number"
+                      className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                    />
                     <input type="date" name="issueDate" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
-                    <input type="number" min={1} name="version" defaultValue={1} className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
                     <select name="status" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm">
-                      {Object.values(DocumentRecordStatus).map((status) => <option key={status} value={status}>{status}</option>)}
+                      {Object.values(DocumentRecordStatus).map((status) => (
+                        <option key={status} value={status}>
+                          {status}
+                        </option>
+                      ))}
                     </select>
-                    <textarea name="notes" rows={2} placeholder="Internal notes" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
-                    <button type="submit" className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-50">
-                      Update document
+                    <textarea
+                      name="notes"
+                      rows={2}
+                      placeholder="Internal notes"
+                      className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                    />
+                    <button
+                      type="submit"
+                      className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
+                    >
+                      Replace (new version)
                     </button>
                   </form>
                 ) : null}
               </div>
             ) : null}
 
-            {activeTab === "revenue" && canViewRevenue ? (
+                  {activeTab === "revenue" && canViewRevenue ? (
               <div className="space-y-3">
                 {shipment.revenues.length === 0 ? (
                   <Empty label="No revenue records yet." />
@@ -1008,7 +1522,7 @@ export function ShipmentDetailClient({
               </div>
             ) : null}
 
-            {activeTab === "costs" && canViewExpenses ? (
+                  {activeTab === "costs" && canViewExpenses ? (
               <div className="space-y-3">
                 {shipment.shipmentCosts.length === 0 ? (
                   <Empty label="No shipment costs registered yet." />
@@ -1151,7 +1665,7 @@ export function ShipmentDetailClient({
               </div>
             ) : null}
 
-            {activeTab === "invoices" && (canCreateInvoices || canEditInvoices || canDeleteInvoices) ? (
+                  {activeTab === "invoices" && (canCreateInvoices || canEditInvoices || canDeleteInvoices) ? (
               <div className="mt-4 space-y-3">
                 <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Invoices</p>
                 {shipment.invoices.length === 0 ? (
@@ -1302,23 +1816,45 @@ export function ShipmentDetailClient({
                 )}
               </div>
             ) : null}
+                </div>
+              </div>
+            ) : (
+              <p className="text-xs text-slate-600">
+                Collapsed to reduce page height. Active view:{" "}
+                <span className="font-medium text-slate-800">{tabLabel(activeTab)}</span> (
+                {activeRecordCount}).
+              </p>
+            )}
           </Card>
         </div>
       </div>
 
       <Card title="Milestones update panel" subtitle="Update milestone dates and progress notes">
-        <MilestoneTimeline
-          shipmentId={shipment.id}
-          milestones={shipment.milestones.map((milestone) => ({
-            id: milestone.id,
-            code: milestone.code,
-            label: milestone.label,
-            expectedAt: milestone.expectedAt ?? null,
-            actualAt: milestone.actualAt ?? null,
-            status: milestone.status,
-            comment: milestone.comment ?? null,
-          }))}
-        />
+        <>
+          {blockedCount > 0 ? (
+            <p className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              Sequential workflow enforced. {blockedCount} milestone
+              {blockedCount === 1 ? "" : "s"} blocked.{" "}
+              {nextAllowedCode
+                ? `Next valid completion: ${nextAllowedCode}.`
+                : "No further milestone can be completed yet."}
+            </p>
+          ) : null}
+          <MilestoneTimeline
+            shipmentId={shipment.id}
+            milestones={shipment.milestones.map((milestone) => ({
+              id: milestone.id,
+              code: milestone.code,
+              label: milestone.label,
+              expectedAt: milestone.expectedAt ?? null,
+              actualAt: milestone.actualAt ?? null,
+              status: timelineStatusByCode.get(milestone.code) ?? milestone.status,
+              comment: milestone.comment ?? null,
+              blockedReason: milestoneUiHints[milestone.code]?.blockedReason ?? null,
+              canComplete: milestoneUiHints[milestone.code]?.canComplete ?? true,
+            }))}
+          />
+        </>
       </Card>
 
       {canEditShipments ? (
@@ -1338,7 +1874,7 @@ export function ShipmentDetailClient({
               commodity: shipment.commodity ?? "",
               mode: shipment.mode as "AIR" | "OCEAN" | "ROAD" | "COURIER",
               direction: shipment.direction as "IMPORT" | "EXPORT",
-              status: shipment.status as
+              status: derivedState.masterStatus as
                 | "DRAFT"
                 | "BOOKING_REQUESTED"
                 | "BOOKING_CONFIRMED"

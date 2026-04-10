@@ -4,6 +4,7 @@ import { PermissionAction, PermissionResource } from "@prisma/client";
 import { getShipmentById } from "@/lib/shipments";
 import { listCustomers } from "@/lib/customers";
 import {
+  applyDocumentParsingDirectAction,
   createInvoiceDirectAction,
   issueInvoiceAFIPDirectAction,
   markInvoicePaidDirectAction,
@@ -13,16 +14,19 @@ import {
   deleteRevenueDirectAction,
   deleteShipmentCostDirectAction,
   deleteShipmentDocumentDirectAction,
+  replaceShipmentDocumentDirectAction,
+  triggerDocumentParsingDirectAction,
+  uploadShipmentDocumentDirectAction,
   updateShipmentAction,
   upsertExpenseDirectAction,
   upsertInvoiceDirectAction,
   upsertRevenueDirectAction,
   upsertShipmentCostDirectAction,
-  upsertShipmentDocumentDirectAction,
 } from "@/app/(dashboard)/shipments/actions";
 import { canUser, enforcePagePermission } from "@/lib/permissions";
 import { ShipmentDetailClient } from "@/components/shipments/shipment-detail-client";
 import { InvoiceLineType, InvoiceStatus } from "@prisma/client";
+import { deriveShipmentState } from "@/lib/domain/derive-shipment-state";
 
 type ShipmentEditPageProps = {
   params: Promise<{
@@ -148,6 +152,20 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
   const quotedMarginPctValue = quotedMarginPct ?? null;
   const varianceMarginPct = hasFinancials && quotedMarginPctValue !== null ? marginPct! - quotedMarginPctValue : null;
   const marginDeteriorated = hasFinancials && quotedMarginPctValue !== null ? marginPct! < quotedMarginPctValue : false;
+  const derivedState = deriveShipmentState(
+    {
+      status: shipment.status,
+      atd: shipment.atd,
+      ata: shipment.ata,
+      deliveredAt: shipment.deliveredAt,
+    },
+    shipment.milestones.map((milestone) => ({
+      code: milestone.code,
+      status: milestone.status,
+      expectedAt: milestone.expectedAt,
+      actualAt: milestone.actualAt,
+    })),
+  );
 
   return (
     <ShipmentDetailClient
@@ -162,7 +180,15 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
         referenceClient: shipment.referenceClient,
         referenceInternal: shipment.referenceInternal,
         shipmentNumber: shipment.shipmentNumber,
-        status: shipment.status,
+        status: derivedState.masterStatus,
+        derivedState: {
+          masterStatus: derivedState.masterStatus,
+          currentStage: derivedState.currentStage,
+          lastCompletedMilestone: derivedState.lastCompletedMilestone,
+          nextExpectedMilestone: derivedState.nextExpectedMilestone,
+          delayedMilestones: derivedState.delayedMilestones,
+          isDelayed: derivedState.isDelayed,
+        },
         mode: shipment.mode,
         direction: shipment.direction,
         customerName: shipment.customer.legalName,
@@ -230,11 +256,19 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
           id: doc.id,
           docType: doc.docType,
           fileName: doc.fileName,
+          fileUrl: doc.fileUrl,
+          uploadedAt: doc.uploadedAt.toISOString(),
           referenceNumber: doc.referenceNumber,
           issueDate: doc.issueDate?.toISOString() ?? null,
           version: doc.version,
           status: doc.status,
           notes: doc.notes,
+          parsingResults: doc.parsingResults.map((result) => ({
+            id: result.id,
+            status: result.status,
+            createdAt: result.createdAt.toISOString(),
+            parsedJson: result.parsedJson,
+          })),
         })),
         revenues: shipment.revenues.map((row) => ({
           id: row.id,
@@ -317,7 +351,10 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
       actions={{
         updateShipmentAction,
         deleteShipmentDocumentDirectAction,
-        upsertShipmentDocumentDirectAction,
+        triggerDocumentParsingDirectAction,
+        applyDocumentParsingDirectAction,
+        uploadShipmentDocumentDirectAction,
+        replaceShipmentDocumentDirectAction,
         deleteRevenueDirectAction,
         upsertRevenueDirectAction,
         deleteExpenseDirectAction,

@@ -1,27 +1,10 @@
-import { InvoiceStatus, MilestoneStatus, ShipmentStatus } from "@prisma/client";
+import { InvoiceStatus, Prisma, ShipmentStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-
-const CRITICAL_STATUS_ORDER = new Set<ShipmentStatus>([
-  ShipmentStatus.IN_TRANSIT,
-  ShipmentStatus.ARRIVED,
-  ShipmentStatus.CUSTOMS,
-  ShipmentStatus.DELIVERED,
-  ShipmentStatus.CLOSED,
-]);
-
-const DELIVERED_STATUSES = new Set<ShipmentStatus>([
-  ShipmentStatus.DELIVERED,
-  ShipmentStatus.CLOSED,
-]);
-
-const ACTIVE_OPERATIONAL_STATUSES = new Set<ShipmentStatus>([
-  ShipmentStatus.BOOKING_REQUESTED,
-  ShipmentStatus.BOOKING_CONFIRMED,
-  ShipmentStatus.IN_TRANSIT,
-  ShipmentStatus.ARRIVED,
-  ShipmentStatus.CUSTOMS,
-  ShipmentStatus.DELIVERED,
-]);
+import { listOpenAlertsForCompany, type AlertFeedRow } from "@/lib/alerts";
+import {
+  deriveShipmentState,
+  isExecutionShipmentStatus,
+} from "@/lib/domain/derive-shipment-state";
 
 const STUCK_THRESHOLDS_DAYS: Partial<Record<ShipmentStatus, number>> = {
   [ShipmentStatus.BOOKING_REQUESTED]: 3,
@@ -39,6 +22,7 @@ type AlertRow = {
   customer: string;
   issue: string;
   ctaHref: string;
+  severity: Severity;
 };
 
 type FinancialRiskRow = AlertRow & {
@@ -72,6 +56,7 @@ type QuickInvoice = {
 };
 
 export type ActionCenterData = {
+  alerts: AlertFeedRow[];
   criticalAlerts: {
     missingDocuments: AlertRow[];
     delayedShipments: AlertRow[];
@@ -115,6 +100,7 @@ function toAlertRow(input: {
   shipmentNumber: string;
   customer: string;
   issue: string;
+  severity: Severity;
 }): AlertRow {
   return {
     id: input.id,
@@ -123,7 +109,22 @@ function toAlertRow(input: {
     customer: input.customer,
     issue: input.issue,
     ctaHref: `/shipments/${input.shipmentId}`,
+    severity: input.severity,
   };
+}
+
+function toStatusSeverity(status: ShipmentStatus): Severity {
+  if (
+    status === ShipmentStatus.IN_TRANSIT ||
+    status === ShipmentStatus.ARRIVED ||
+    status === ShipmentStatus.CUSTOMS
+  ) {
+    return "HIGH";
+  }
+  if (status === ShipmentStatus.BOOKING_CONFIRMED || status === ShipmentStatus.DELIVERED) {
+    return "MEDIUM";
+  }
+  return "LOW";
 }
 
 function addTask(
@@ -150,72 +151,70 @@ export async function getActionCenterData(companyId: string): Promise<ActionCent
   const today = new Date();
   const todayStart = startOfDay(today);
 
-  const [shipments, recentShipments, recentInvoices] = await Promise.all([
-    prisma.shipment.findMany({
-      where: { companyId },
+  const shipmentSelect = {
+    id: true,
+    shipmentNumber: true,
+    mode: true,
+    status: true,
+    customer: { select: { legalName: true } },
+    quote: {
+      select: {
+        marginAmount: true,
+        totalSell: true,
+      },
+    },
+    originCode: true,
+    destinationCode: true,
+    pol: true,
+    pod: true,
+    airportOrigin: true,
+    airportDestination: true,
+    carrierName: true,
+    vesselOrFlight: true,
+    bookingRef: true,
+    houseRef: true,
+    masterRef: true,
+    etd: true,
+    eta: true,
+    atd: true,
+    ata: true,
+    deliveredAt: true,
+    createdAt: true,
+    updatedAt: true,
+    shipmentCosts: {
+      select: {
+        amount: true,
+      },
+    },
+    invoices: {
       select: {
         id: true,
-        shipmentNumber: true,
-        mode: true,
+        invoiceNumber: true,
+        total: true,
+        dueDate: true,
         status: true,
-        customer: { select: { legalName: true } },
-        quote: {
-          select: {
-            marginAmount: true,
-            totalSell: true,
-          },
-        },
-        originCode: true,
-        destinationCode: true,
-        pol: true,
-        pod: true,
-        airportOrigin: true,
-        airportDestination: true,
-        carrierName: true,
-        vesselOrFlight: true,
-        bookingRef: true,
-        houseRef: true,
-        masterRef: true,
-        etd: true,
-        eta: true,
-        atd: true,
-        deliveredAt: true,
-        createdAt: true,
-        updatedAt: true,
-        shipmentCosts: {
-          select: {
-            amount: true,
-          },
-        },
-        invoices: {
-          select: {
-            id: true,
-            invoiceNumber: true,
-            total: true,
-            dueDate: true,
-            status: true,
-          },
-        },
-        milestones: {
-          select: {
-            code: true,
-            status: true,
-            actualAt: true,
-          },
-        },
       },
+    },
+    milestones: {
+      select: {
+        code: true,
+        status: true,
+        expectedAt: true,
+        actualAt: true,
+      },
+    },
+  } satisfies Prisma.ShipmentSelect;
+
+  const [shipments, recentShipments, recentInvoices, alerts] = await Promise.all([
+    prisma.shipment.findMany({
+      where: { companyId },
+      select: shipmentSelect,
       orderBy: [{ updatedAt: "desc" }],
       take: 700,
     }),
     prisma.shipment.findMany({
       where: { companyId },
-      select: {
-        id: true,
-        shipmentNumber: true,
-        status: true,
-        updatedAt: true,
-        customer: { select: { legalName: true } },
-      },
+      select: shipmentSelect,
       orderBy: [{ updatedAt: "desc" }],
       take: 5,
     }),
@@ -232,6 +231,7 @@ export async function getActionCenterData(companyId: string): Promise<ActionCent
       orderBy: [{ updatedAt: "desc" }],
       take: 5,
     }),
+    listOpenAlertsForCompany(companyId, 30),
   ]);
 
   const criticalMissingDocuments: AlertRow[] = [];
@@ -253,11 +253,34 @@ export async function getActionCenterData(companyId: string): Promise<ActionCent
   const operationsTaskMap = new Map<string, GeneratedTask>();
   const financeTaskMap = new Map<string, GeneratedTask>();
 
-  for (const shipment of shipments) {
+  const shipmentsWithDerivedState = shipments.map((shipment) => {
+    const derived = deriveShipmentState(
+      {
+        status: shipment.status,
+        atd: shipment.atd,
+        ata: shipment.ata,
+        deliveredAt: shipment.deliveredAt,
+      },
+      shipment.milestones.map((milestone) => ({
+        code: milestone.code,
+        status: milestone.status,
+        expectedAt: milestone.expectedAt,
+        actualAt: milestone.actualAt,
+      })),
+    );
+    return {
+      ...shipment,
+      derivedState: derived,
+    };
+  });
+
+  for (const shipment of shipmentsWithDerivedState) {
     const customer = shipment.customer.legalName;
     const shipmentHref = `/shipments/${shipment.id}`;
-    const isDelivered = DELIVERED_STATUSES.has(shipment.status) || Boolean(shipment.deliveredAt);
-    const isCancelled = shipment.status === ShipmentStatus.CANCELLED;
+    const isDelivered =
+      shipment.derivedState.masterStatus === ShipmentStatus.DELIVERED ||
+      shipment.derivedState.masterStatus === ShipmentStatus.CLOSED;
+    const isCancelled = shipment.derivedState.masterStatus === ShipmentStatus.CANCELLED;
     const ageInCurrentStatusDays = daysAgo(shipment.updatedAt, todayStart);
     const validInvoices = shipment.invoices.filter((invoice) => invoice.status !== InvoiceStatus.CANCELLED);
     const invoiceTotal = validInvoices.reduce((sum, invoice) => sum + asMoney(invoice.total), 0);
@@ -280,13 +303,15 @@ export async function getActionCenterData(companyId: string): Promise<ActionCent
           shipmentNumber: shipment.shipmentNumber,
           customer,
           issue: `Missing references: ${missingReferences.join(", ")}`,
+          severity: toStatusSeverity(shipment.derivedState.masterStatus),
         }),
       );
+      const derivedSeverity = toStatusSeverity(shipment.derivedState.masterStatus);
       addTask(operationsTaskMap, {
         key: `op-missing-docs-${shipment.id}`,
         title: `Add missing booking documents for ${shipment.shipmentNumber}`,
         detail: `Complete ${missingReferences.join(", ")} for ${customer}.`,
-        severity: "HIGH",
+        severity: derivedSeverity,
         ctaHref: shipmentHref,
       });
     }
@@ -300,43 +325,55 @@ export async function getActionCenterData(companyId: string): Promise<ActionCent
           shipmentNumber: shipment.shipmentNumber,
           customer,
           issue: `ETA passed ${delayedDays} day(s) ago and shipment is not delivered.`,
+          severity: toStatusSeverity(shipment.derivedState.masterStatus),
         }),
       );
+      const derivedSeverity = toStatusSeverity(shipment.derivedState.masterStatus);
       addTask(operationsTaskMap, {
         key: `op-delay-${shipment.id}`,
         title: `Update ETA for ${shipment.shipmentNumber}`,
         detail: `Shipment is delayed versus ETA; customer ${customer} needs updated arrival commitment.`,
-        severity: "HIGH",
+        severity: derivedSeverity,
         ctaHref: shipmentHref,
       });
     }
 
-    const stuckThreshold = STUCK_THRESHOLDS_DAYS[shipment.status];
+    const stuckStatusKey = shipment.derivedState.masterStatus;
+    const stuckThreshold = STUCK_THRESHOLDS_DAYS[stuckStatusKey];
     if (stuckThreshold && ageInCurrentStatusDays > stuckThreshold && !isCancelled) {
+      const stuckStatusLabel = stuckStatusKey
+        .toLowerCase()
+        .split("_")
+        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+        .join(" ");
       criticalStuckStatuses.push(
         toAlertRow({
           id: `stuck-${shipment.id}`,
           shipmentId: shipment.id,
           shipmentNumber: shipment.shipmentNumber,
           customer,
-          issue: `${shipment.status} for ${ageInCurrentStatusDays} day(s) (threshold ${stuckThreshold}).`,
+          issue: `${stuckStatusLabel} for ${ageInCurrentStatusDays} day(s) (threshold ${stuckThreshold}).`,
+          severity: toStatusSeverity(stuckStatusKey),
         }),
       );
+      const derivedSeverity = toStatusSeverity(stuckStatusKey);
       addTask(operationsTaskMap, {
         key: `op-stuck-${shipment.id}`,
         title: `Unblock status for ${shipment.shipmentNumber}`,
-        detail: `${shipment.status} exceeded SLA by ${ageInCurrentStatusDays - stuckThreshold} day(s).`,
-        severity: "HIGH",
+        detail: `${stuckStatusLabel} exceeded SLA by ${ageInCurrentStatusDays - stuckThreshold} day(s).`,
+        severity: derivedSeverity,
         ctaHref: shipmentHref,
       });
     }
 
-    const hasDepartedMilestone = shipment.milestones.some(
-      (milestone) =>
-        milestone.code === "DEPARTED" &&
-        (milestone.actualAt !== null || milestone.status === MilestoneStatus.COMPLETED),
-    );
-    if (shipment.status === ShipmentStatus.IN_TRANSIT && !shipment.atd && !hasDepartedMilestone) {
+    if (
+      shipment.derivedState.masterStatus === ShipmentStatus.IN_TRANSIT &&
+      shipment.derivedState.lastCompletedMilestone !== "DEPARTED" &&
+      shipment.derivedState.lastCompletedMilestone !== "ARRIVED" &&
+      shipment.derivedState.lastCompletedMilestone !== "CUSTOMS_IN_PROGRESS" &&
+      shipment.derivedState.lastCompletedMilestone !== "DELIVERED" &&
+      shipment.derivedState.lastCompletedMilestone !== "CLOSED"
+    ) {
       criticalMissingMilestones.push(
         toAlertRow({
           id: `missing-milestone-${shipment.id}`,
@@ -344,18 +381,27 @@ export async function getActionCenterData(companyId: string): Promise<ActionCent
           shipmentNumber: shipment.shipmentNumber,
           customer,
           issue: "IN_TRANSIT without ATD / DEPARTED milestone confirmation.",
+          severity: toStatusSeverity(shipment.derivedState.masterStatus),
         }),
       );
+      const derivedSeverity = toStatusSeverity(shipment.derivedState.masterStatus);
       addTask(operationsTaskMap, {
         key: `op-atd-${shipment.id}`,
         title: `Confirm departure milestone for ${shipment.shipmentNumber}`,
         detail: "Shipment is in transit but ATD is missing.",
-        severity: "HIGH",
+        severity: derivedSeverity,
         ctaHref: shipmentHref,
       });
     }
 
-    if (!ACTIVE_OPERATIONAL_STATUSES.has(shipment.status) || isCancelled) {
+    const isActiveOperationalStatus =
+      shipment.derivedState.masterStatus === ShipmentStatus.BOOKING_REQUESTED ||
+      shipment.derivedState.masterStatus === ShipmentStatus.BOOKING_CONFIRMED ||
+      shipment.derivedState.masterStatus === ShipmentStatus.IN_TRANSIT ||
+      shipment.derivedState.masterStatus === ShipmentStatus.ARRIVED ||
+      shipment.derivedState.masterStatus === ShipmentStatus.CUSTOMS ||
+      shipment.derivedState.masterStatus === ShipmentStatus.DELIVERED;
+    if (!isActiveOperationalStatus || isCancelled) {
       continue;
     }
 
@@ -367,18 +413,23 @@ export async function getActionCenterData(companyId: string): Promise<ActionCent
           shipmentNumber: shipment.shipmentNumber,
           customer,
           issue: "Carrier missing on active shipment.",
+          severity: toStatusSeverity(shipment.derivedState.masterStatus),
         }),
       );
+      const derivedSeverity = toStatusSeverity(shipment.derivedState.masterStatus);
       addTask(operationsTaskMap, {
         key: `op-carrier-${shipment.id}`,
         title: `Assign carrier for ${shipment.shipmentNumber}`,
         detail: "Carrier is required to execute movement and vendor coordination.",
-        severity: "HIGH",
+        severity: derivedSeverity,
         ctaHref: shipmentHref,
       });
     }
 
-    if (!shipment.vesselOrFlight && shipment.status !== ShipmentStatus.BOOKING_REQUESTED) {
+    if (
+      !shipment.vesselOrFlight &&
+      shipment.derivedState.masterStatus !== ShipmentStatus.BOOKING_REQUESTED
+    ) {
       operationalRisks.HIGH.push(
         toAlertRow({
           id: `op-missing-voyage-${shipment.id}`,
@@ -386,6 +437,7 @@ export async function getActionCenterData(companyId: string): Promise<ActionCent
           shipmentNumber: shipment.shipmentNumber,
           customer,
           issue: "Vessel/flight missing after booking stage.",
+          severity: toStatusSeverity(shipment.derivedState.masterStatus),
         }),
       );
     }
@@ -398,13 +450,15 @@ export async function getActionCenterData(companyId: string): Promise<ActionCent
           shipmentNumber: shipment.shipmentNumber,
           customer,
           issue: "ETD/ETA incomplete for operational planning.",
+          severity: toStatusSeverity(shipment.derivedState.masterStatus),
         }),
       );
+      const derivedSeverity = toStatusSeverity(shipment.derivedState.masterStatus);
       addTask(operationsTaskMap, {
         key: `op-schedule-${shipment.id}`,
         title: `Update ETD/ETA for ${shipment.shipmentNumber}`,
         detail: "Schedule data is incomplete and blocks planning/communication.",
-        severity: "MEDIUM",
+        severity: derivedSeverity,
         ctaHref: shipmentHref,
       });
     }
@@ -424,18 +478,20 @@ export async function getActionCenterData(companyId: string): Promise<ActionCent
           shipmentNumber: shipment.shipmentNumber,
           customer,
           issue: "Origin/destination or routing details are incomplete.",
+          severity: toStatusSeverity(shipment.derivedState.masterStatus),
         }),
       );
+      const derivedSeverity = toStatusSeverity(shipment.derivedState.masterStatus);
       addTask(operationsTaskMap, {
         key: `op-routing-${shipment.id}`,
         title: `Complete routing for ${shipment.shipmentNumber}`,
         detail: "Origin/destination and routing references must be complete.",
-        severity: "MEDIUM",
+        severity: derivedSeverity,
         ctaHref: shipmentHref,
       });
     }
 
-    if (shipment.status === ShipmentStatus.CUSTOMS && ageInCurrentStatusDays > 4) {
+    if (shipment.derivedState.masterStatus === ShipmentStatus.CUSTOMS && ageInCurrentStatusDays > 4) {
       operationalRisks.HIGH.push(
         toAlertRow({
           id: `op-customs-aging-${shipment.id}`,
@@ -443,18 +499,20 @@ export async function getActionCenterData(companyId: string): Promise<ActionCent
           shipmentNumber: shipment.shipmentNumber,
           customer,
           issue: `Customs stage open for ${ageInCurrentStatusDays} day(s).`,
+          severity: toStatusSeverity(shipment.derivedState.masterStatus),
         }),
       );
+      const derivedSeverity = toStatusSeverity(shipment.derivedState.masterStatus);
       addTask(operationsTaskMap, {
         key: `op-customs-${shipment.id}`,
         title: `Escalate customs case ${shipment.shipmentNumber}`,
         detail: "Shipment has prolonged customs exposure.",
-        severity: "HIGH",
+        severity: derivedSeverity,
         ctaHref: shipmentHref,
       });
     }
 
-    if (shipment.status === ShipmentStatus.DELIVERED && ageInCurrentStatusDays > 2) {
+    if (shipment.derivedState.masterStatus === ShipmentStatus.DELIVERED && ageInCurrentStatusDays > 2) {
       operationalRisks.LOW.push(
         toAlertRow({
           id: `op-close-${shipment.id}`,
@@ -462,19 +520,22 @@ export async function getActionCenterData(companyId: string): Promise<ActionCent
           shipmentNumber: shipment.shipmentNumber,
           customer,
           issue: `Delivered file still open for ${ageInCurrentStatusDays} day(s).`,
+          severity: toStatusSeverity(shipment.derivedState.masterStatus),
         }),
       );
+      const derivedSeverity = toStatusSeverity(shipment.derivedState.masterStatus);
       addTask(operationsTaskMap, {
         key: `op-close-${shipment.id}`,
         title: `Close shipment ${shipment.shipmentNumber}`,
         detail: "Delivery is completed but file remains open.",
-        severity: "LOW",
+        severity: derivedSeverity,
         ctaHref: shipmentHref,
       });
     }
 
-    if (CRITICAL_STATUS_ORDER.has(shipment.status) && validInvoices.length === 0) {
+    if (isExecutionShipmentStatus(shipment.derivedState.masterStatus) && validInvoices.length === 0) {
       const impact = quotedSell && quotedSell > 0 ? quotedSell : totalCosts;
+      const derivedSeverity = toStatusSeverity(shipment.derivedState.masterStatus);
       financeNoInvoice.push({
         id: `fin-no-invoice-${shipment.id}`,
         shipmentId: shipment.id,
@@ -484,17 +545,19 @@ export async function getActionCenterData(companyId: string): Promise<ActionCent
         amountImpact: impact,
         ctaHref: shipmentHref,
         ctaLabel: "Open shipment",
+        severity: derivedSeverity,
       });
       addTask(financeTaskMap, {
         key: `fin-create-invoice-${shipment.id}`,
         title: `Create invoice for ${shipment.shipmentNumber}`,
         detail: "Shipment reached execution stage without billing.",
-        severity: "HIGH",
+        severity: derivedSeverity,
         ctaHref: shipmentHref,
       });
     }
 
     if (totalCosts > 0 && invoiceTotal <= 0) {
+      const derivedSeverity = toStatusSeverity(shipment.derivedState.masterStatus);
       financeCostWithoutRevenue.push({
         id: `fin-cost-no-revenue-${shipment.id}`,
         shipmentId: shipment.id,
@@ -504,27 +567,33 @@ export async function getActionCenterData(companyId: string): Promise<ActionCent
         amountImpact: totalCosts,
         ctaHref: shipmentHref,
         ctaLabel: "Open shipment",
+        severity: derivedSeverity,
       });
       addTask(financeTaskMap, {
         key: `fin-cost-confirm-${shipment.id}`,
         title: `Confirm cost + revenue for ${shipment.shipmentNumber}`,
         detail: "Shipment has supplier costs without matching commercial invoice.",
-        severity: "HIGH",
+        severity: derivedSeverity,
         ctaHref: shipmentHref,
       });
     }
 
-    if (shipment.shipmentCosts.length === 0 && CRITICAL_STATUS_ORDER.has(shipment.status)) {
+    if (
+      shipment.shipmentCosts.length === 0 &&
+      isExecutionShipmentStatus(shipment.derivedState.masterStatus)
+    ) {
+      const derivedSeverity = toStatusSeverity(shipment.derivedState.masterStatus);
       addTask(financeTaskMap, {
         key: `fin-add-cost-${shipment.id}`,
         title: `Confirm cost from supplier for ${shipment.shipmentNumber}`,
         detail: "No shipment costs are loaded for an executed file.",
-        severity: "MEDIUM",
+        severity: derivedSeverity,
         ctaHref: shipmentHref,
       });
     }
 
     if (invoiceTotal > 0 && (actualMargin < 0 || (quotedMargin !== null && actualMargin < quotedMargin))) {
+      const derivedSeverity = toStatusSeverity(shipment.derivedState.masterStatus);
       const impact =
         quotedMargin !== null
           ? Math.max(quotedMargin - actualMargin, 0)
@@ -541,12 +610,13 @@ export async function getActionCenterData(companyId: string): Promise<ActionCent
         amountImpact: impact,
         ctaHref: shipmentHref,
         ctaLabel: "Open shipment",
+        severity: derivedSeverity,
       });
       addTask(financeTaskMap, {
         key: `fin-margin-${shipment.id}`,
         title: `Review margin leakage on ${shipment.shipmentNumber}`,
         detail: "Actual profitability is below target; validate buy rates and sell recovery.",
-        severity: actualMargin < 0 ? "HIGH" : "MEDIUM",
+        severity: actualMargin < 0 ? "HIGH" : derivedSeverity,
         ctaHref: shipmentHref,
       });
     }
@@ -555,6 +625,7 @@ export async function getActionCenterData(companyId: string): Promise<ActionCent
       if (!invoice.dueDate) continue;
       if (invoice.status === InvoiceStatus.PAID || invoice.status === InvoiceStatus.CANCELLED) continue;
       if (invoice.dueDate.getTime() >= todayStart.getTime()) continue;
+      const derivedSeverity = toStatusSeverity(shipment.derivedState.masterStatus);
 
       financeOverdueInvoices.push({
         id: `fin-overdue-${invoice.id}`,
@@ -565,12 +636,13 @@ export async function getActionCenterData(companyId: string): Promise<ActionCent
         amountImpact: asMoney(invoice.total),
         ctaHref: `/finance/invoices/${invoice.id}`,
         ctaLabel: "Open invoice",
+        severity: derivedSeverity,
       });
       addTask(financeTaskMap, {
         key: `fin-overdue-${invoice.id}`,
         title: `Follow up overdue invoice ${invoice.invoiceNumber}`,
         detail: `Past due for ${customer} on ${shipment.shipmentNumber}.`,
-        severity: "HIGH",
+        severity: derivedSeverity,
         ctaHref: `/finance/invoices/${invoice.id}`,
       });
     }
@@ -584,6 +656,7 @@ export async function getActionCenterData(companyId: string): Promise<ActionCent
   };
 
   return {
+    alerts,
     criticalAlerts: {
       missingDocuments: criticalMissingDocuments.slice(0, 20),
       delayedShipments: criticalDelayedShipments.slice(0, 20),
@@ -606,13 +679,29 @@ export async function getActionCenterData(companyId: string): Promise<ActionCent
       finance: sortBySeverity(financeTaskMap.values()),
     },
     quickActions: {
-      recentShipments: recentShipments.map((shipment) => ({
-        id: shipment.id,
-        shipmentNumber: shipment.shipmentNumber,
-        customer: shipment.customer.legalName,
-        status: shipment.status,
-        updatedAt: shipment.updatedAt,
-      })),
+      recentShipments: recentShipments.map((shipment) => {
+        const derived = deriveShipmentState(
+          {
+            status: shipment.status,
+            atd: shipment.atd,
+            ata: shipment.ata,
+            deliveredAt: shipment.deliveredAt,
+          },
+          shipment.milestones.map((milestone) => ({
+            code: milestone.code,
+            status: milestone.status,
+            expectedAt: milestone.expectedAt,
+            actualAt: milestone.actualAt,
+          })),
+        );
+        return {
+          id: shipment.id,
+          shipmentNumber: shipment.shipmentNumber,
+          customer: shipment.customer.legalName,
+          status: derived.masterStatus as ShipmentStatus,
+          updatedAt: shipment.updatedAt,
+        };
+      }),
       recentInvoices: recentInvoices.map((invoice) => ({
         id: invoice.id,
         invoiceNumber: invoice.invoiceNumber,

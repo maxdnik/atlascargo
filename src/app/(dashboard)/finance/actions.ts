@@ -10,6 +10,7 @@ import {
 import { z } from "zod";
 import { enforceActionPermission } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
+import { runAlertChecksForInvoiceMutation } from "@/lib/alerts";
 import {
   addInvoiceLine,
   cancelInvoice,
@@ -138,6 +139,11 @@ export async function createFinanceInvoiceAction(
       notes: parsedHeader.notes,
     });
 
+    await runAlertChecksForInvoiceMutation({
+      companyId: ctx.companyId,
+      shipmentId: parsedHeader.shipmentId,
+    });
+
     revalidatePath("/finance");
     revalidatePath("/finance/invoices");
     revalidatePath(`/finance/invoices/${created.id}`);
@@ -250,6 +256,13 @@ export async function updateFinanceInvoiceAction(
             dueDate && lines.length > 0 ? InvoiceStatus.READY_TO_ISSUE : InvoiceStatus.DRAFT,
         },
       });
+
+      return selectedShipment.id;
+    });
+
+    await runAlertChecksForInvoiceMutation({
+      companyId: ctx.companyId,
+      shipmentId: parsedHeader.shipmentId,
     });
 
     revalidatePath("/finance");
@@ -310,6 +323,12 @@ async function mutateInvoiceStatus(
       companyId: ctx.companyId,
       invoiceId,
     });
+
+    await runAlertChecksForInvoiceMutation({
+      companyId: ctx.companyId,
+      shipmentId: updated.shipmentId,
+    });
+
     revalidatePath("/finance/invoices");
     revalidatePath(`/finance/invoices/${updated.id}`);
     revalidatePath("/finance/ar");

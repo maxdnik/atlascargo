@@ -124,15 +124,12 @@ enum ShipmentPartyRole {
 }
 
 enum DocumentType {
+  BL
+  AWB
   COMMERCIAL_INVOICE
+  SUPPLIER_INVOICE
   PACKING_LIST
-  HBL
-  MBL
-  HAWB
-  MAWB
-  CERTIFICATE
-  PERMIT
-  POD
+  CUSTOMS_DOC
   OTHER
 }
 
@@ -207,6 +204,31 @@ enum NotificationLevel {
   SUCCESS
 }
 
+enum AlertType {
+  MISSING_INVOICE
+  NEGATIVE_MARGIN
+  ETA_DELAY
+  MISSING_DOC
+}
+
+enum AlertSeverity {
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum AlertStatus {
+  OPEN
+  RESOLVED
+}
+
+enum DocumentParsingStatus {
+  PENDING
+  PARSED
+  REVIEW_REQUIRED
+  FAILED
+}
+
 enum ActivityAction {
   CREATE
   UPDATE
@@ -259,6 +281,7 @@ model Company {
   tasks         Task[]
   notes         Note[]
   activities    ActivityLog[]
+  alerts        Alert[]
 }
 
 model Branch {
@@ -699,6 +722,7 @@ model Shipment {
   invoices           Invoice[]
   tasks              Task[]
   notesLog           Note[]
+  alerts             Alert[]
 
   @@unique([companyId, shipmentNumber])
   @@index([shipmentNumber])
@@ -804,6 +828,7 @@ model ShipmentDocument {
   shipmentId      String
   docType         DocumentType
   fileName        String
+  fileUrl         String
   referenceNumber String?
   issueDate       DateTime?
   uploadedById    String?
@@ -816,8 +841,23 @@ model ShipmentDocument {
 
   shipment   Shipment @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
   uploadedBy User?    @relation("DocumentUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+  parsingResults DocumentParsingResult[]
 
   @@index([shipmentId, docType, status])
+}
+
+model DocumentParsingResult {
+  id                 String                @id @default(cuid())
+  shipmentDocumentId String
+  documentType       DocumentType
+  parsedJson         Json?
+  status             DocumentParsingStatus @default(PENDING)
+  createdAt          DateTime              @default(now())
+
+  shipmentDocument ShipmentDocument @relation(fields: [shipmentDocumentId], references: [id], onDelete: Cascade)
+
+  @@index([shipmentDocumentId, createdAt])
+  @@index([status, createdAt])
 }
 
 model Revenue {
@@ -1083,4 +1123,23 @@ model Notification {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, readAt, createdAt])
+}
+
+model Alert {
+  id         String        @id @default(cuid())
+  companyId  String
+  type       AlertType
+  severity   AlertSeverity
+  shipmentId String?
+  message    String
+  status     AlertStatus   @default(OPEN)
+  createdAt  DateTime      @default(now())
+  resolvedAt DateTime?
+
+  company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  shipment Shipment? @relation(fields: [shipmentId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, status, createdAt])
+  @@index([companyId, type, status])
+  @@index([shipmentId, status])
 }

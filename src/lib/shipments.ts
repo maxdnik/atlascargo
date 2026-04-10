@@ -1,6 +1,7 @@
 import { ShipmentStatus, TransportMode } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
+import { deriveShipmentState } from "@/lib/domain/derive-shipment-state";
 
 type ShipmentListFilters = {
   q?: string;
@@ -23,11 +24,10 @@ export async function listShipments(companyId: string, filters?: ShipmentListFil
   const statusFilter = isShipmentStatus(filters?.status) ? filters?.status : undefined;
   const customerId = filters?.customerId?.trim() || undefined;
 
-  return prisma.shipment.findMany({
+  const rows = await prisma.shipment.findMany({
     where: {
       companyId,
       ...(modeFilter ? { mode: modeFilter } : {}),
-      ...(statusFilter ? { status: statusFilter } : {}),
       ...(customerId ? { customerId } : {}),
       ...(search
         ? {
@@ -49,7 +49,54 @@ export async function listShipments(companyId: string, filters?: ShipmentListFil
           }
         : {}),
     },
-    include: {
+    select: {
+      id: true,
+      companyId: true,
+      shipmentNumber: true,
+      quoteId: true,
+      customerId: true,
+      mode: true,
+      direction: true,
+      status: true,
+      incotermCode: true,
+      serviceLevel: true,
+      originCode: true,
+      destinationCode: true,
+      pol: true,
+      pod: true,
+      airportOrigin: true,
+      airportDestination: true,
+      placeOfReceipt: true,
+      placeOfDelivery: true,
+      shipperName: true,
+      consigneeName: true,
+      notifyPartyName: true,
+      agentOriginName: true,
+      agentDestinationName: true,
+      carrierName: true,
+      vesselOrFlight: true,
+      referenceClient: true,
+      referenceInternal: true,
+      bookingRef: true,
+      houseRef: true,
+      masterRef: true,
+      commodity: true,
+      packageCount: true,
+      packageType: true,
+      grossWeightKg: true,
+      chargeableWeightKg: true,
+      volumeM3: true,
+      containerCount: true,
+      containerType: true,
+      cargoReadyDate: true,
+      etd: true,
+      eta: true,
+      atd: true,
+      ata: true,
+      deliveredAt: true,
+      notes: true,
+      createdAt: true,
+      updatedAt: true,
       customer: {
         select: {
           id: true,
@@ -63,9 +110,121 @@ export async function listShipments(companyId: string, filters?: ShipmentListFil
           quoteNumber: true,
         },
       },
+      milestones: {
+        select: {
+          code: true,
+          status: true,
+          expectedAt: true,
+          actualAt: true,
+        },
+      },
     },
     orderBy: [{ createdAt: "desc" }],
     take: 100,
+  });
+
+  const enrichedRows = rows.map((row) => {
+    const derived = deriveShipmentState(
+      {
+        status: row.status,
+        atd: row.atd,
+        ata: row.ata,
+        deliveredAt: row.deliveredAt,
+      },
+      row.milestones.map((milestone) => ({
+        code: milestone.code,
+        status: milestone.status,
+        expectedAt: milestone.expectedAt,
+        actualAt: milestone.actualAt,
+      })),
+    );
+
+    return {
+      ...row,
+      status: derived.masterStatus,
+      derivedState: derived,
+    };
+  });
+
+  if (!statusFilter) {
+    return enrichedRows;
+  }
+  return enrichedRows.filter((row) => row.status === statusFilter);
+}
+
+export function deriveShipmentStateForView(input: {
+  currentStatus: ShipmentStatus;
+  atd: Date | null;
+  ata: Date | null;
+  deliveredAt: Date | null;
+  milestones: Array<{
+    id?: string;
+    code: string;
+    status: string;
+    expectedAt: Date | null;
+    actualAt: Date | null;
+  }>;
+}) {
+  return deriveShipmentState(
+    {
+      status: input.currentStatus,
+      atd: input.atd,
+      ata: input.ata,
+      deliveredAt: input.deliveredAt,
+    },
+    input.milestones.map((milestone) => ({
+      code: milestone.code,
+      status: milestone.status,
+      expectedAt: milestone.expectedAt,
+      actualAt: milestone.actualAt,
+    })),
+  );
+}
+
+export async function listShipmentsWithDerivedState(companyId: string) {
+  const rows = await prisma.shipment.findMany({
+    where: { companyId },
+    select: {
+      id: true,
+      shipmentNumber: true,
+      status: true,
+      updatedAt: true,
+      atd: true,
+      ata: true,
+      deliveredAt: true,
+      milestones: {
+        select: {
+          code: true,
+          status: true,
+          expectedAt: true,
+          actualAt: true,
+        },
+      },
+    },
+    orderBy: [{ updatedAt: "desc" }],
+  });
+
+  return rows.map((row) => {
+    const derived = deriveShipmentState(
+      {
+        status: row.status,
+        atd: row.atd,
+        ata: row.ata,
+        deliveredAt: row.deliveredAt,
+      },
+      row.milestones.map((milestone) => ({
+        code: milestone.code,
+        status: milestone.status,
+        expectedAt: milestone.expectedAt,
+        actualAt: milestone.actualAt,
+      })),
+    );
+
+    return {
+      ...row,
+      status: derived.masterStatus,
+      derivedState: derived,
+    };
   });
 }
 
@@ -118,6 +277,29 @@ export async function getShipmentById(companyId: string, id: string) {
       },
       documents: {
         orderBy: [{ uploadedAt: "desc" }, { createdAt: "desc" }],
+        select: {
+          id: true,
+          docType: true,
+          fileName: true,
+          fileUrl: true,
+          referenceNumber: true,
+          issueDate: true,
+          version: true,
+          status: true,
+          notes: true,
+          uploadedAt: true,
+          parsingResults: {
+            orderBy: [{ createdAt: "desc" }],
+            take: 1,
+            select: {
+              id: true,
+              status: true,
+              parsedJson: true,
+              createdAt: true,
+              documentType: true,
+            },
+          },
+        },
       },
       revenues: {
         orderBy: [{ createdAt: "desc" }],
