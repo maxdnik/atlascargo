@@ -4,6 +4,7 @@ import { ArrowRight, FileText, Plane, Search, ShipWheel, Truck, TriangleAlert } 
 import { listShipments } from "@/lib/shipments";
 import { listCustomers } from "@/lib/customers";
 import { prisma } from "@/lib/prisma";
+import { getStatusLabel } from "@/lib/shipment-state";
 import { deleteShipmentDirectAction } from "./actions";
 import { QuoteToShipmentForm } from "@/components/shipments/quote-to-shipment-form";
 import { enforcePagePermission } from "@/lib/permissions";
@@ -16,14 +17,6 @@ type ShipmentsPageProps = {
     customerId?: string;
   }>;
 };
-
-function statusLabel(status: string) {
-  return status
-    .toLowerCase()
-    .split("_")
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}
 
 function statusBadgeClass(status: string) {
   if (status === "CLOSED") return "bg-slate-200 text-slate-800";
@@ -196,7 +189,7 @@ export default async function ShipmentsPage({ searchParams }: ShipmentsPageProps
                     <span
                       className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${statusBadgeClass(shipment.status)}`}
                     >
-                      {statusLabel(shipment.status)}
+                      {getStatusLabel(shipment.status)}
                     </span>
                   </td>
                   <td className="px-4 py-3 font-medium">
@@ -239,7 +232,7 @@ export default async function ShipmentsPage({ searchParams }: ShipmentsPageProps
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-1.5">
-                      {shipment.status === "IN_TRANSIT" ? (
+                      {shipment.derivedState.isDelayed ? (
                         <TriangleAlert className="h-3.5 w-3.5 text-amber-500" />
                       ) : null}
                       {shipment.eta ? new Date(shipment.eta).toLocaleDateString() : "-"}

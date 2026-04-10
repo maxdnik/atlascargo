@@ -260,6 +260,10 @@ type ParsingFieldKey =
   | "destinationCode"
   | "vesselOrFlight";
 
+function isStrictStageCode(code: string): code is (typeof SHIPMENT_STAGE_SEQUENCE)[number] {
+  return SHIPMENT_STAGE_SEQUENCE.includes(code as (typeof SHIPMENT_STAGE_SEQUENCE)[number]);
+}
+
 function shipmentStatusClass(status: string) {
   if (status === "DELIVERED" || status === "CLOSED") return "bg-emerald-100 text-emerald-800";
   if (status === "CUSTOMS" || status === "BOOKING_CONFIRMED") return "bg-amber-100 text-amber-800";
@@ -533,6 +537,7 @@ export function ShipmentDetailClient({
   );
   const lastCompletedIndex = useMemo(() => {
     if (!derivedState.lastCompletedMilestone) return -1;
+    if (!isStrictStageCode(derivedState.lastCompletedMilestone)) return -1;
     return SHIPMENT_STAGE_SEQUENCE.indexOf(derivedState.lastCompletedMilestone);
   }, [derivedState.lastCompletedMilestone]);
   const progressPercent = useMemo(() => {
@@ -688,7 +693,9 @@ export function ShipmentDetailClient({
   }, [normalizedDocuments]);
 
   const blockedCount = Object.values(milestoneUiHints).filter((hint) => !hint.canComplete).length;
-  const nextAllowed = Object.values(milestoneUiHints).find((hint) => hint.canComplete);
+  const nextAllowedCode = Object.entries(milestoneUiHints).find(
+    ([, hint]) => hint.canComplete,
+  )?.[0];
 
   const routeLabel = `${shipment.originCode ?? "-"} → ${shipment.destinationCode ?? "-"}`;
   const shipmentReadyForBilling = derivedState.masterStatus === ShipmentStatus.CLOSED;
@@ -1828,8 +1835,8 @@ export function ShipmentDetailClient({
             <p className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
               Sequential workflow enforced. {blockedCount} milestone
               {blockedCount === 1 ? "" : "s"} blocked.{" "}
-              {nextAllowed
-                ? `Next valid completion: ${nextAllowed.code}.`
+              {nextAllowedCode
+                ? `Next valid completion: ${nextAllowedCode}.`
                 : "No further milestone can be completed yet."}
             </p>
           ) : null}

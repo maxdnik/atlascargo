@@ -43,6 +43,11 @@ export type ShipmentDerivedState = {
   nextExpectedMilestone: ShipmentStageCode | null;
   delayedMilestones: ShipmentStageCode[];
   isDelayed: boolean;
+  dates: {
+    atd: Date | null;
+    ata: Date | null;
+    deliveredAt: Date | null;
+  };
 };
 
 function isCompletedMilestone(milestone: ShipmentStateEngineMilestoneInput) {
@@ -98,6 +103,11 @@ export function deriveShipmentState(
       nextExpectedMilestone: null,
       delayedMilestones: [],
       isDelayed: false,
+      dates: {
+        atd: shipment.atd ?? null,
+        ata: shipment.ata ?? null,
+        deliveredAt: shipment.deliveredAt ?? null,
+      },
     };
   }
 
@@ -156,5 +166,28 @@ export function deriveShipmentState(
     nextExpectedMilestone,
     delayedMilestones,
     isDelayed: delayedMilestones.length > 0,
+    dates: {
+      atd: shipment.atd ?? null,
+      ata: shipment.ata ?? null,
+      deliveredAt: shipment.deliveredAt ?? null,
+    },
   };
+}
+
+export function getStatusLabel(code: string) {
+  return code
+    .toLowerCase()
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+export function isExecutionShipmentStatus(status: ShipmentMasterStatus | string) {
+  return (
+    status === "IN_TRANSIT" ||
+    status === "ARRIVED" ||
+    status === "CUSTOMS" ||
+    status === "DELIVERED" ||
+    status === "CLOSED"
+  );
 }

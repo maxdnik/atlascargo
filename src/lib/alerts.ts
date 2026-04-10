@@ -8,6 +8,7 @@ import {
 } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { notifyAlertCreated } from "@/lib/notifications";
+import { deriveShipmentState } from "@/lib/domain/derive-shipment-state";
 
 const TWO_DAYS_MS = 48 * 60 * 60 * 1000;
 const MANAGED_ALERT_TYPES = [
@@ -17,11 +18,6 @@ const MANAGED_ALERT_TYPES = [
   AlertType.MISSING_DOC,
 ] as const;
 
-const RESOLVED_STATUSES = new Set<ShipmentStatus>([
-  ShipmentStatus.DELIVERED,
-  ShipmentStatus.CLOSED,
-  ShipmentStatus.CANCELLED,
-]);
 const INVOICE_EXCLUDED_STATUSES = new Set<InvoiceStatus>([InvoiceStatus.CANCELLED]);
 
 type AlertCandidate = {
@@ -131,6 +127,15 @@ async function getShipmentSnapshots(where: { companyId?: string; shipmentIds?: s
 function deriveCandidates(now: Date, shipment: ShipmentSnapshot): AlertCandidate[] {
   const candidates: AlertCandidate[] = [];
   const openInvoices = shipment.invoices.filter((invoice) => !INVOICE_EXCLUDED_STATUSES.has(invoice.status));
+  const derivedState = deriveShipmentState(
+    {
+      status: shipment.status,
+      atd: shipment.atd,
+      ata: null,
+      deliveredAt: shipment.deliveredAt,
+    },
+    [],
+  );
 
   if (shipment.atd) {
     const hasInvoiceAfterAtd = openInvoices.some(
@@ -162,7 +167,9 @@ function deriveCandidates(now: Date, shipment: ShipmentSnapshot): AlertCandidate
   if (
     shipment.eta &&
     shipment.eta.getTime() < dayStart(now).getTime() &&
-    !RESOLVED_STATUSES.has(shipment.status) &&
+    derivedState.masterStatus !== ShipmentStatus.DELIVERED &&
+    derivedState.masterStatus !== ShipmentStatus.CLOSED &&
+    derivedState.masterStatus !== ShipmentStatus.CANCELLED &&
     !shipment.deliveredAt
   ) {
     candidates.push({
