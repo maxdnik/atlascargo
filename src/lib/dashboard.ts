@@ -47,7 +47,6 @@ export async function getDashboardKpis(companyId = DEFAULT_COMPANY_ID) {
         masterRef: true,
         bookingRef: true,
         deliveredAt: true,
-        updatedAt: true,
         customer: {
           select: {
             legalName: true,
