@@ -55,6 +55,7 @@ function isMilestoneCancelled(milestone: ShipmentStateEngineMilestoneInput) {
 }
 
 function toStageStatus(stage: ShipmentStageCode): ShipmentMasterStatus {
+  if (stage === "CARGO_READY") return "BOOKING_CONFIRMED";
   if (stage === "DEPARTED") return "IN_TRANSIT";
   if (stage === "CUSTOMS_IN_PROGRESS") return "CUSTOMS";
   return stage;

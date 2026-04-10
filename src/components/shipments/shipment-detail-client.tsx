@@ -29,7 +29,8 @@ import type { Prisma } from "@prisma/client";
 
 import type { ShipmentActionState } from "@/app/(dashboard)/shipments/actions";
 import { MilestoneTimeline } from "@/components/shipments/milestone-timeline";
-import { canCompleteMilestoneInSequence } from "@/lib/milestone-sequence";
+import { getStatusLabel } from "@/lib/shipment-state";
+import { SHIPMENT_STAGE_SEQUENCE } from "@/lib/domain/derive-shipment-state";
 import { ShipmentForm } from "@/components/shipments/shipment-form";
 
 type ShipmentDetailViewModel = {
@@ -44,6 +45,14 @@ type ShipmentDetailViewModel = {
   referenceInternal?: string | null;
   shipmentNumber: string;
   status: string;
+  derivedState: {
+    masterStatus: string;
+    currentStage: string;
+    lastCompletedMilestone: string | null;
+    nextExpectedMilestone: string | null;
+    delayedMilestones: string[];
+    isDelayed: boolean;
+  };
   mode: string;
   direction: string;
   customerName: string;
@@ -251,54 +260,19 @@ type ParsingFieldKey =
   | "destinationCode"
   | "vesselOrFlight";
 
-function getMilestoneCompletionUiHints(
-  milestones: Array<{
-    code: string;
-    status: MilestoneStatus;
-    actualAt: Date | null;
-  }>,
-) {
-  return milestones.map((row) => {
-    const result = canCompleteMilestoneInSequence({
-      targetCode: row.code,
-      milestones,
-    });
-    if (row.actualAt || row.status === MilestoneStatus.COMPLETED) {
-      return {
-        code: row.code,
-        canComplete: true,
-        blockedReason: null,
-      };
-    }
-    if (!result.canComplete) {
-      return {
-        code: row.code,
-        canComplete: false,
-        blockedReason: result.blockedReason,
-      };
-    }
-    return {
-      code: row.code,
-      canComplete: true,
-      blockedReason: null,
-    };
-  });
-}
-
-function statusLabel(status: string) {
-  return status
-    .toLowerCase()
-    .split("_")
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}
-
 function shipmentStatusClass(status: string) {
   if (status === "DELIVERED" || status === "CLOSED") return "bg-emerald-100 text-emerald-800";
   if (status === "CUSTOMS" || status === "BOOKING_CONFIRMED") return "bg-amber-100 text-amber-800";
   if (status === "IN_TRANSIT" || status === "ARRIVED") return "bg-sky-100 text-sky-700";
   if (status === "CANCELLED") return "bg-rose-100 text-rose-700";
   return "bg-slate-100 text-slate-700";
+}
+
+function tabLabel(tab: "documents" | "revenue" | "costs" | "invoices") {
+  if (tab === "documents") return "Documents";
+  if (tab === "revenue") return "Revenue";
+  if (tab === "costs") return "Costs";
+  return "Invoices";
 }
 
 function money(value: number) {
@@ -552,14 +526,111 @@ export function ShipmentDetailClient({
     },
     invoiceInitialState,
   );
+  const derivedState = shipment.derivedState;
+  const delayedMilestoneSet = useMemo(
+    () => new Set(derivedState.delayedMilestones),
+    [derivedState.delayedMilestones],
+  );
+  const lastCompletedIndex = useMemo(() => {
+    if (!derivedState.lastCompletedMilestone) return -1;
+    return SHIPMENT_STAGE_SEQUENCE.indexOf(derivedState.lastCompletedMilestone);
+  }, [derivedState.lastCompletedMilestone]);
+  const progressPercent = useMemo(() => {
+    if (derivedState.masterStatus === "CLOSED") return 100;
+    if (lastCompletedIndex < 0) return 0;
+    return Math.round(((lastCompletedIndex + 1) / SHIPMENT_STAGE_SEQUENCE.length) * 100);
+  }, [derivedState.masterStatus, lastCompletedIndex]);
   const timeline = useMemo(() => {
     return shipment.milestones.map((m, index) => ({
       ...m,
-      isCurrent: m.status === "IN_PROGRESS",
-      isDone: m.status === "COMPLETED",
+      status: (() => {
+        const stageIndex = SHIPMENT_STAGE_SEQUENCE.indexOf(m.code as (typeof SHIPMENT_STAGE_SEQUENCE)[number]);
+        if (stageIndex === -1) {
+          return m.status;
+        }
+        if (stageIndex <= lastCompletedIndex) {
+          return MilestoneStatus.COMPLETED;
+        }
+        if (delayedMilestoneSet.has(m.code)) {
+          return MilestoneStatus.DELAYED;
+        }
+        if (derivedState.nextExpectedMilestone === m.code) {
+          return MilestoneStatus.IN_PROGRESS;
+        }
+        return MilestoneStatus.PENDING;
+      })(),
+      isCurrent:
+        derivedState.nextExpectedMilestone === m.code &&
+        !delayedMilestoneSet.has(m.code) &&
+        SHIPMENT_STAGE_SEQUENCE.indexOf(m.code as (typeof SHIPMENT_STAGE_SEQUENCE)[number]) !== -1,
+      isDone:
+        SHIPMENT_STAGE_SEQUENCE.indexOf(m.code as (typeof SHIPMENT_STAGE_SEQUENCE)[number]) !== -1 &&
+        SHIPMENT_STAGE_SEQUENCE.indexOf(m.code as (typeof SHIPMENT_STAGE_SEQUENCE)[number]) <=
+          lastCompletedIndex,
       isLast: index === shipment.milestones.length - 1,
     }));
-  }, [shipment.milestones]);
+  }, [
+    delayedMilestoneSet,
+    derivedState.nextExpectedMilestone,
+    lastCompletedIndex,
+    shipment.milestones,
+  ]);
+  const timelineStatusByCode = useMemo(
+    () => new Map(timeline.map((milestone) => [milestone.code, milestone.status])),
+    [timeline],
+  );
+  const milestoneUiHints = useMemo(() => {
+    return Object.fromEntries(
+      shipment.milestones.map((milestone) => {
+        const stageIndex = SHIPMENT_STAGE_SEQUENCE.indexOf(
+          milestone.code as (typeof SHIPMENT_STAGE_SEQUENCE)[number],
+        );
+        if (stageIndex === -1) {
+          return [
+            milestone.code,
+            {
+              canComplete: true,
+              blockedReason: null,
+            },
+          ] as const;
+        }
+        if (stageIndex <= lastCompletedIndex) {
+          return [
+            milestone.code,
+            {
+              canComplete: true,
+              blockedReason: null,
+            },
+          ] as const;
+        }
+        if (derivedState.nextExpectedMilestone === milestone.code) {
+          return [
+            milestone.code,
+            {
+              canComplete: true,
+              blockedReason: null,
+            },
+          ] as const;
+        }
+        if (derivedState.nextExpectedMilestone) {
+          return [
+            milestone.code,
+            {
+              canComplete: false,
+              blockedReason: `Complete ${derivedState.nextExpectedMilestone} first`,
+            },
+          ] as const;
+        }
+        return [
+          milestone.code,
+          {
+            canComplete: false,
+            blockedReason: "No further milestone can be completed yet",
+          },
+        ] as const;
+      }),
+    ) as Record<string, { canComplete: boolean; blockedReason: string | null }>;
+  }, [derivedState.nextExpectedMilestone, lastCompletedIndex, shipment.milestones]);
   const normalizedDocuments = useMemo(
     () =>
       shipment.documents.map((doc) => ({
@@ -616,8 +687,11 @@ export function ShipmentDetailClient({
     return map;
   }, [normalizedDocuments]);
 
+  const blockedCount = Object.values(milestoneUiHints).filter((hint) => !hint.canComplete).length;
+  const nextAllowed = Object.values(milestoneUiHints).find((hint) => hint.canComplete);
+
   const routeLabel = `${shipment.originCode ?? "-"} → ${shipment.destinationCode ?? "-"}`;
-  const shipmentReadyForBilling = shipment.status === ShipmentStatus.CLOSED;
+  const shipmentReadyForBilling = derivedState.masterStatus === ShipmentStatus.CLOSED;
   const operationalRecordCount =
     shipment.documents.length +
     shipment.invoices.length +
@@ -657,9 +731,9 @@ export function ShipmentDetailClient({
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <span
-              className={`inline-flex rounded-full px-3 py-1.5 text-sm font-semibold ${shipmentStatusClass(shipment.status)}`}
+              className={`inline-flex rounded-full px-3 py-1.5 text-sm font-semibold ${shipmentStatusClass(derivedState.masterStatus)}`}
             >
-              {statusLabel(shipment.status)}
+              {getStatusLabel(derivedState.masterStatus)}
             </span>
             {shipment.quoteNumber ? (
               <span className="inline-flex rounded-full bg-indigo-100 px-3 py-1.5 text-sm font-semibold text-indigo-700">
@@ -684,6 +758,36 @@ export function ShipmentDetailClient({
           <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
             <p className="text-xs text-slate-500">Delivered</p>
             <p className="mt-1 text-sm font-semibold text-slate-900">{dateLabel(shipment.deliveredAt, true)}</p>
+          </div>
+        </div>
+        <div className="mt-3 grid gap-3 md:grid-cols-4">
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+            <p className="text-xs text-slate-500">Current stage</p>
+            <p className="mt-1 text-sm font-semibold text-slate-900">
+              {getStatusLabel(derivedState.currentStage)}
+            </p>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+            <p className="text-xs text-slate-500">Next milestone</p>
+            <p className="mt-1 text-sm font-semibold text-slate-900">
+              {derivedState.nextExpectedMilestone
+                ? getStatusLabel(derivedState.nextExpectedMilestone)
+                : "None"}
+            </p>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+            <p className="text-xs text-slate-500">Progress</p>
+            <p className="mt-1 text-sm font-semibold text-slate-900">{progressPercent}%</p>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+            <p className="text-xs text-slate-500">Operational issue</p>
+            <p
+              className={`mt-1 text-sm font-semibold ${
+                derivedState.isDelayed ? "text-amber-700" : "text-emerald-700"
+              }`}
+            >
+              {derivedState.isDelayed ? "Needs attention" : "No issues"}
+            </p>
           </div>
         </div>
       </section>
@@ -1710,7 +1814,8 @@ export function ShipmentDetailClient({
             ) : (
               <p className="text-xs text-slate-600">
                 Collapsed to reduce page height. Active view:{" "}
-                <span className="font-medium text-slate-800">{statusLabel(activeTab)}</span> ({activeRecordCount}).
+                <span className="font-medium text-slate-800">{tabLabel(activeTab)}</span> (
+                {activeRecordCount}).
               </p>
             )}
           </Card>
@@ -1718,50 +1823,31 @@ export function ShipmentDetailClient({
       </div>
 
       <Card title="Milestones update panel" subtitle="Update milestone dates and progress notes">
-        {(() => {
-          const milestoneUiHints = getMilestoneCompletionUiHints(
-            shipment.milestones.map((milestone) => ({
+        <>
+          {blockedCount > 0 ? (
+            <p className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              Sequential workflow enforced. {blockedCount} milestone
+              {blockedCount === 1 ? "" : "s"} blocked.{" "}
+              {nextAllowed
+                ? `Next valid completion: ${nextAllowed.code}.`
+                : "No further milestone can be completed yet."}
+            </p>
+          ) : null}
+          <MilestoneTimeline
+            shipmentId={shipment.id}
+            milestones={shipment.milestones.map((milestone) => ({
               id: milestone.id,
               code: milestone.code,
-              status: milestone.status,
-              expectedAt: milestone.expectedAt ? new Date(milestone.expectedAt) : null,
-              actualAt: milestone.actualAt ? new Date(milestone.actualAt) : null,
-            })),
-          );
-          const blockedCount = milestoneUiHints.filter((hint) => !hint.canComplete).length;
-          const nextAllowed = milestoneUiHints.find((hint) => hint.canComplete);
-          return (
-            <>
-              {blockedCount > 0 ? (
-                <p className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                  Sequential workflow enforced. {blockedCount} milestone
-                  {blockedCount === 1 ? "" : "s"} blocked.{" "}
-                  {nextAllowed
-                    ? `Next valid completion: ${nextAllowed.code}.`
-                    : "No further milestone can be completed yet."}
-                </p>
-              ) : null}
-              <MilestoneTimeline
-                shipmentId={shipment.id}
-                milestones={shipment.milestones.map((milestone) => ({
-                  id: milestone.id,
-                  code: milestone.code,
-                  label: milestone.label,
-                  expectedAt: milestone.expectedAt ?? null,
-                  actualAt: milestone.actualAt ?? null,
-                  status: milestone.status,
-                  comment: milestone.comment ?? null,
-                  blockedReason:
-                    milestoneUiHints.find((hint) => hint.code === milestone.code)?.blockedReason ??
-                    null,
-                  canComplete:
-                    milestoneUiHints.find((hint) => hint.code === milestone.code)?.canComplete ??
-                    true,
-                }))}
-              />
-            </>
-          );
-        })()}
+              label: milestone.label,
+              expectedAt: milestone.expectedAt ?? null,
+              actualAt: milestone.actualAt ?? null,
+              status: timelineStatusByCode.get(milestone.code) ?? milestone.status,
+              comment: milestone.comment ?? null,
+              blockedReason: milestoneUiHints[milestone.code]?.blockedReason ?? null,
+              canComplete: milestoneUiHints[milestone.code]?.canComplete ?? true,
+            }))}
+          />
+        </>
       </Card>
 
       {canEditShipments ? (
@@ -1781,7 +1867,7 @@ export function ShipmentDetailClient({
               commodity: shipment.commodity ?? "",
               mode: shipment.mode as "AIR" | "OCEAN" | "ROAD" | "COURIER",
               direction: shipment.direction as "IMPORT" | "EXPORT",
-              status: shipment.status as
+              status: derivedState.masterStatus as
                 | "DRAFT"
                 | "BOOKING_REQUESTED"
                 | "BOOKING_CONFIRMED"
