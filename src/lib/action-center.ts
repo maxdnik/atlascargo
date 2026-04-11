@@ -1,5 +1,6 @@
 import { InvoiceStatus, MilestoneStatus, ShipmentStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { listOpenAlertsForCompany, type AlertFeedRow } from "@/lib/alerts";
 
 const CRITICAL_STATUS_ORDER = new Set<ShipmentStatus>([
   ShipmentStatus.IN_TRANSIT,
@@ -72,6 +73,7 @@ type QuickInvoice = {
 };
 
 export type ActionCenterData = {
+  alerts: AlertFeedRow[];
   criticalAlerts: {
     missingDocuments: AlertRow[];
     delayedShipments: AlertRow[];
@@ -150,7 +152,7 @@ export async function getActionCenterData(companyId: string): Promise<ActionCent
   const today = new Date();
   const todayStart = startOfDay(today);
 
-  const [shipments, recentShipments, recentInvoices] = await Promise.all([
+  const [shipments, recentShipments, recentInvoices, alerts] = await Promise.all([
     prisma.shipment.findMany({
       where: { companyId },
       select: {
@@ -232,6 +234,7 @@ export async function getActionCenterData(companyId: string): Promise<ActionCent
       orderBy: [{ updatedAt: "desc" }],
       take: 5,
     }),
+    listOpenAlertsForCompany(companyId, 30),
   ]);
 
   const criticalMissingDocuments: AlertRow[] = [];
@@ -584,6 +587,7 @@ export async function getActionCenterData(companyId: string): Promise<ActionCent
   };
 
   return {
+    alerts,
     criticalAlerts: {
       missingDocuments: criticalMissingDocuments.slice(0, 20),
       delayedShipments: criticalDelayedShipments.slice(0, 20),
