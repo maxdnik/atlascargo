@@ -3,7 +3,7 @@ import { PermissionAction, PermissionResource } from "@prisma/client";
 
 import { getShipmentById } from "@/lib/shipments";
 import { listCustomers } from "@/lib/customers";
-import { listShipmentAuditHistory } from "@/lib/audit";
+import { getShipmentTimeline } from "@/lib/shipment-timeline";
 import {
   createInvoiceDirectAction,
   issueInvoiceAFIPDirectAction,
@@ -130,7 +130,7 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
 
   const { id } = await params;
   const shipment = await getShipmentById(session.companyId, id);
-  const shipmentAuditHistory = await listShipmentAuditHistory({
+  const shipmentTimeline = await getShipmentTimeline({
     companyId: session.companyId,
     shipmentId: id,
     limit: 120,
@@ -296,16 +296,17 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
             type: line.type as InvoiceLineType,
           })),
         })),
-        auditHistory: shipmentAuditHistory.map((event) => ({
+        controlTimeline: shipmentTimeline.map((event) => ({
           id: event.id,
+          shipmentId: event.shipmentId,
+          eventType: event.eventType,
+          category: event.category,
+          title: event.title,
+          description: event.description,
           actorType: event.actorType,
           actorName: event.actorName,
-          action: event.action,
-          summary: event.summary,
-          field: event.field,
-          oldValue: event.oldValue,
-          newValue: event.newValue,
-          timestamp: event.timestamp.toISOString(),
+          metadata: event.metadata,
+          timestamp: event.timestamp,
         })),
       }}
       customers={customers}

@@ -13,8 +13,6 @@ import {
   Truck,
 } from "lucide-react";
 import {
-  type ActivityAction,
-  type ActivityActorType,
   DocumentRecordStatus,
   FinancialRecordStatus,
   InvoiceLineType,
@@ -26,9 +24,10 @@ import {
 } from "@prisma/client";
 
 import type { ShipmentActionState } from "@/app/(dashboard)/shipments/actions";
-import { AuditHistoryTimeline } from "@/components/audit/audit-history-timeline";
 import { MilestoneTimeline } from "@/components/shipments/milestone-timeline";
+import { ShipmentControlTimeline } from "@/components/shipments/shipment-control-timeline";
 import { ShipmentForm } from "@/components/shipments/shipment-form";
+import type { ShipmentTimelineEvent } from "@/lib/shipment-timeline";
 
 type ShipmentDetailViewModel = {
   id: string;
@@ -169,17 +168,7 @@ type ShipmentDetailViewModel = {
       type: InvoiceLineType;
     }>;
   }>;
-  auditHistory: Array<{
-    id: string;
-    action: ActivityAction;
-    actorType: ActivityActorType;
-    actorName: string;
-    summary: string;
-    field: string | null;
-    oldValue: string | null;
-    newValue: string | null;
-    timestamp: string;
-  }>;
+  controlTimeline: ShipmentTimelineEvent[];
 };
 
 type Props = {
@@ -1327,8 +1316,8 @@ export function ShipmentDetailClient({
         />
       </Card>
 
-      <Card title="Shipment history" subtitle="Audit trail of operational and financial changes">
-        <AuditHistoryTimeline items={shipment.auditHistory} />
+      <Card title="Shipment control timeline" subtitle="Unified chronological feed across operations, finance, documents, alerts, and system changes">
+        <ShipmentControlTimeline items={shipment.controlTimeline} />
       </Card>
 
       {canEditShipments ? (
