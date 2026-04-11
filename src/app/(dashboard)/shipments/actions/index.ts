@@ -1,5 +1,3 @@
-"use server";
-
 export type { ShipmentActionState } from "./types";
 
 export {
