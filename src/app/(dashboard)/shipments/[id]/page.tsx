@@ -3,10 +3,12 @@ import { PermissionAction, PermissionResource } from "@prisma/client";
 
 import { getShipmentById } from "@/lib/shipments";
 import { listCustomers } from "@/lib/customers";
+import { getShipmentTimeline } from "@/lib/shipment-timeline";
+import { getShipmentQuoteContinuity } from "@/lib/shipment-quote-continuity";
 import {
   createInvoiceDirectAction,
   issueInvoiceAFIPDirectAction,
-  markInvoicePaidDirectAction,
+  registerShipmentInvoicePaymentDirectAction,
   cancelInvoiceDirectAction,
   deleteInvoiceDirectAction,
   deleteExpenseDirectAction,
@@ -129,25 +131,69 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
 
   const { id } = await params;
   const shipment = await getShipmentById(session.companyId, id);
+  const shipmentTimeline = await getShipmentTimeline({
+    companyId: session.companyId,
+    shipmentId: id,
+    limit: 120,
+  });
   const customers = await listCustomers(session.companyId);
   if (!shipment) {
     notFound();
   }
 
-  const invoicedRevenue = shipment.invoices.reduce((sum, row) => sum + Number(row.total), 0);
-  const totalShipmentCost = shipment.shipmentCosts.reduce((sum, row) => sum + Number(row.amount), 0);
-  const grossProfit = invoicedRevenue - totalShipmentCost;
-  const marginPct = invoicedRevenue > 0 ? (grossProfit / invoicedRevenue) * 100 : null;
-  const quotedSell = shipment.quote ? Number(shipment.quote.totalSell) : null;
-  const quotedCost = shipment.quote ? Number(shipment.quote.totalBuy) : null;
-  const quotedMarginAmount = shipment.quote ? Number(shipment.quote.marginAmount) : null;
-  const quotedMarginPct = shipment.quote ? Number(shipment.quote.marginPct) * 100 : null;
-  const hasRevenue = shipment.invoices.length > 0 && invoicedRevenue > 0;
-  const hasCosts = shipment.shipmentCosts.length > 0 && totalShipmentCost > 0;
-  const hasFinancials = hasRevenue && hasCosts;
-  const quotedMarginPctValue = quotedMarginPct ?? null;
-  const varianceMarginPct = hasFinancials && quotedMarginPctValue !== null ? marginPct! - quotedMarginPctValue : null;
-  const marginDeteriorated = hasFinancials && quotedMarginPctValue !== null ? marginPct! < quotedMarginPctValue : false;
+  const continuity = getShipmentQuoteContinuity({
+    quotedSellAmount: shipment.quotedSellAmount,
+    quotedCostAmount: shipment.quotedCostAmount,
+    quotedGrossProfit: shipment.quotedGrossProfit,
+    quotedMarginPercent: shipment.quotedMarginPercent,
+    quotedTransitTimeDays: shipment.quotedTransitTimeDays,
+    quotedMode: shipment.quotedMode,
+    quotedDirection: shipment.quotedDirection,
+    quotedOrigin: shipment.quotedOrigin,
+    quotedDestination: shipment.quotedDestination,
+    quotedAssumptionsNotes: shipment.quotedAssumptionsNotes,
+    quotedChargeBreakdown: shipment.quotedChargeBreakdown,
+    quotedSupplierSuggestions: shipment.quotedSupplierSuggestions,
+    quoteSnapshot: shipment.quoteSnapshot,
+    originCode: shipment.originCode,
+    destinationCode: shipment.destinationCode,
+    pol: shipment.pol,
+    pod: shipment.pod,
+    carrierName: shipment.carrierName,
+    serviceLevel: shipment.serviceLevel,
+    atd: shipment.atd,
+    ata: shipment.ata,
+    milestones: shipment.milestones.map((row) => ({
+      code: row.code,
+      actualAt: row.actualAt,
+    })),
+    invoices: shipment.invoices.map((row) => ({
+      total: row.total,
+      status: row.status,
+    })),
+    revenues: shipment.revenues.map((row) => ({
+      amountBase: row.amountBase,
+      status: row.status,
+    })),
+    shipmentCosts: shipment.shipmentCosts.map((row) => ({
+      supplierName: row.supplierName,
+      amount: row.amount,
+      conceptCategory: row.conceptCategory,
+      customConcept: row.customConcept,
+    })),
+    expenses: shipment.expenses.map((row) => ({
+      supplierName: row.supplierName,
+      amountBase: row.amountBase,
+      concept: row.concept,
+    })),
+  });
+
+  const getPaymentStatus = (total: number, paid: number): "UNPAID" | "PARTIALLY_PAID" | "PAID" => {
+    if (total <= 0) return "PAID";
+    if (paid <= 0) return "UNPAID";
+    if (paid + 0.000001 >= total) return "PAID";
+    return "PARTIALLY_PAID";
+  };
 
   return (
     <ShipmentDetailClient
@@ -199,24 +245,14 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
         containerCount: shipment.containerCount,
         containerType: shipment.containerType,
         notes: shipment.notes,
-        quoteFinancials: {
-          hasQuote: Boolean(shipment.quote),
-          quotedSell,
-          quotedCost,
-          quotedMarginAmount,
-          quotedMarginPct,
-        },
-        actualFinancials: {
-          invoicedRevenue,
-          totalShipmentCost,
-          grossProfit,
-          marginPct,
-          varianceMarginPct,
-          hasRevenue,
-          hasCosts,
-          hasFinancials,
-          marginDeteriorated,
-        },
+        quoteSnapshotCapturedAt:
+          shipment.quoteSnapshot &&
+          typeof shipment.quoteSnapshot === "object" &&
+          "capturedAt" in shipment.quoteSnapshot &&
+          typeof shipment.quoteSnapshot.capturedAt === "string"
+            ? shipment.quoteSnapshot.capturedAt
+            : null,
+        quoteContinuity: continuity,
         milestones: shipment.milestones.map((milestone) => ({
           id: milestone.id,
           code: milestone.code,
@@ -271,6 +307,16 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
           notes: row.notes,
         })),
         invoices: shipment.invoices.map((row) => ({
+          paidAmount: row.payments.reduce((sum, payment) => sum + Number(payment.amount), 0),
+          outstandingAmount: Math.max(
+            Number(row.total) -
+              row.payments.reduce((sum, payment) => sum + Number(payment.amount), 0),
+            0,
+          ),
+          paymentStatus: getPaymentStatus(
+            Number(row.total),
+            row.payments.reduce((sum, payment) => sum + Number(payment.amount), 0),
+          ),
           id: row.id,
           invoiceNumber: row.invoiceNumber,
           status: row.status as InvoiceStatus,
@@ -289,6 +335,19 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
             amount: Number(line.amount),
             type: line.type as InvoiceLineType,
           })),
+        })),
+        controlTimeline: shipmentTimeline.map((event) => ({
+          id: event.id,
+          shipmentId: event.shipmentId,
+          eventType: event.eventType,
+          category: event.category,
+          title: event.title,
+          description: event.description,
+          actorType: event.actorType,
+          actorName: event.actorName,
+          reference: event.reference,
+          metadata: event.metadata,
+          timestamp: event.timestamp,
         })),
       }}
       customers={customers}
@@ -327,7 +386,7 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
         createInvoiceDirectAction,
         upsertInvoiceDirectAction,
         issueInvoiceAFIPDirectAction,
-        markInvoicePaidDirectAction,
+        registerInvoicePaymentDirectAction: registerShipmentInvoicePaymentDirectAction,
         cancelInvoiceDirectAction,
         deleteInvoiceDirectAction,
       }}

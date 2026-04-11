@@ -2,9 +2,11 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
+import { ActivityAction, ActivityActorType, EntityType } from "@prisma/client";
 
 import { enforceActionPermission } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
+import { recordAuditEvent, recordEntityDiff } from "@/lib/audit";
 
 const customerSchema = z.object({
   id: z.string().optional(),
@@ -26,6 +28,13 @@ export type CustomerActionState = {
 
 async function getContext() {
   return enforceActionPermission("CUSTOMERS", "EDIT");
+}
+
+function getAuditActor(ctx: { userId: string }) {
+  return {
+    actorType: ActivityActorType.USER,
+    actorId: ctx.userId,
+  };
 }
 
 export async function createCustomerAction(
@@ -64,18 +73,15 @@ export async function createCustomerAction(
       },
     });
 
-    await prisma.activityLog.create({
-      data: {
-        companyId: ctx.companyId,
-        entityType: "CUSTOMER",
-        entityId: created.id,
-        action: "CREATE",
-        actorId: ctx.userId,
-        afterJson: {
-          code: parsed.code.toUpperCase(),
-          legalName: parsed.legalName,
-        },
-      },
+    await recordAuditEvent({
+      companyId: ctx.companyId,
+      entityType: EntityType.CUSTOMER,
+      entityId: created.id,
+      action: ActivityAction.CREATE,
+      customerId: created.id,
+      summary: `Customer ${created.code} created.`,
+      after: created as unknown as Record<string, unknown>,
+      actor: getAuditActor(ctx),
     });
 
     revalidatePath("/customers");
@@ -116,6 +122,9 @@ export async function updateCustomerAction(
         companyId: ctx.companyId,
       },
     });
+    if (!before) {
+      throw new Error("Customer not found");
+    }
 
     const updated = await prisma.customer.update({
       where: {
@@ -135,16 +144,27 @@ export async function updateCustomerAction(
       },
     });
 
-    await prisma.activityLog.create({
-      data: {
-        companyId: ctx.companyId,
-        entityType: "CUSTOMER",
-        entityId: updated.id,
-        action: "UPDATE",
-        actorId: ctx.userId,
-        beforeJson: before ?? undefined,
-        afterJson: updated,
-      },
+    await recordEntityDiff({
+      companyId: ctx.companyId,
+      entityType: EntityType.CUSTOMER,
+      entityId: updated.id,
+      action: ActivityAction.UPDATE,
+      customerId: updated.id,
+      before: before as unknown as Record<string, unknown>,
+      after: updated as unknown as Record<string, unknown>,
+      trackedFields: [
+        "code",
+        "legalName",
+        "tradeName",
+        "taxId",
+        "country",
+        "city",
+        "address",
+        "paymentTermsDays",
+        "isActive",
+      ],
+      actor: getAuditActor(ctx),
+      fallbackSummary: `Customer ${updated.code} updated.`,
     });
 
     revalidatePath("/customers");
@@ -172,6 +192,9 @@ export async function deleteCustomerAction(
         companyId: ctx.companyId,
       },
     });
+    if (!before) {
+      throw new Error("Customer not found");
+    }
 
     await prisma.customer.delete({
       where: {
@@ -180,15 +203,15 @@ export async function deleteCustomerAction(
       },
     });
 
-    await prisma.activityLog.create({
-      data: {
-        companyId: ctx.companyId,
-        entityType: "CUSTOMER",
-        entityId: id,
-        action: "DELETE",
-        actorId: ctx.userId,
-        beforeJson: before ?? undefined,
-      },
+    await recordAuditEvent({
+      companyId: ctx.companyId,
+      entityType: EntityType.CUSTOMER,
+      entityId: id,
+      action: ActivityAction.DELETE,
+      customerId: id,
+      summary: `Customer ${before.code} deleted.`,
+      before: before as unknown as Record<string, unknown>,
+      actor: getAuditActor(ctx),
     });
 
     revalidatePath("/customers");

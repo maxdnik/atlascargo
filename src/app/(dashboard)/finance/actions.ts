@@ -2,20 +2,29 @@
 
 import { revalidatePath } from "next/cache";
 import {
+  ActivityAction,
+  ActivityActorType,
+  EntityType,
   GeneralExpenseCategory,
   GeneralExpenseStatus,
   InvoiceLineType,
   InvoiceStatus,
+  PaymentEntityType,
 } from "@prisma/client";
 import { z } from "zod";
 import { enforceActionPermission } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import {
+  runAlertChecksForInvoiceMutation,
+  runAlertChecksForShipmentUpdate,
+} from "@/lib/alerts";
+import { recordAuditEvent, recordEntityDiff } from "@/lib/audit";
+import { registerEntityPayment } from "@/lib/payments";
+import {
   addInvoiceLine,
   cancelInvoice,
   createInvoiceForShipment,
   issueInvoiceWithAfip,
-  markInvoicePaid,
   updateInvoiceHeader,
 } from "@/lib/invoices";
 
@@ -46,6 +55,25 @@ const ALLOWED_LINE_TYPES = [
   InvoiceLineType.DOCUMENTATION,
   InvoiceLineType.OTHER,
 ] as const;
+
+const registerInvoicePaymentSchema = z.object({
+  invoiceId: z.string().min(1),
+  amount: z.coerce.number().positive().optional(),
+  paymentDate: z.string().optional(),
+  method: z.string().max(50).optional(),
+  reference: z.string().max(120).optional(),
+  notes: z.string().max(1200).optional(),
+});
+
+const registerPayablePaymentSchema = z.object({
+  entityId: z.string().min(1),
+  entityType: z.nativeEnum(PaymentEntityType).optional(),
+  amount: z.coerce.number().positive().optional(),
+  paymentDate: z.string().optional(),
+  method: z.string().max(50).optional(),
+  reference: z.string().max(120).optional(),
+  notes: z.string().max(1200).optional(),
+});
 
 function parseInvoiceLines(formData: FormData) {
   const descriptions = formData
@@ -90,6 +118,43 @@ function calculateTaxes(subtotal: number) {
   return Math.round(subtotal * 0.21 * 100) / 100;
 }
 
+function getAuditActor(ctx: { userId: string }) {
+  return {
+    actorType: ActivityActorType.USER,
+    actorId: ctx.userId,
+  };
+}
+
+function revalidateCoreFinanceSurfaces(input: {
+  shipmentId?: string | null;
+  invoiceId?: string;
+  includeExpenses?: boolean;
+}) {
+  revalidatePath("/shipments");
+  if (input.shipmentId) {
+    revalidatePath(`/shipments/${input.shipmentId}`);
+  }
+
+  revalidatePath("/dashboard");
+  revalidatePath("/dashboard/action-center");
+
+  revalidatePath("/finance");
+  revalidatePath("/finance/ar");
+  revalidatePath("/finance/ap");
+  revalidatePath("/finance/forecast");
+  revalidatePath("/finance/profitability");
+  revalidatePath("/finance/invoices");
+
+  if (input.invoiceId) {
+    revalidatePath(`/finance/invoices/${input.invoiceId}`);
+    revalidatePath(`/finance/invoices/${input.invoiceId}/edit`);
+  }
+
+  if (input.includeExpenses) {
+    revalidatePath("/finance/expenses");
+  }
+}
+
 export async function createFinanceInvoiceAction(
   _prevState: FinanceActionState,
   formData: FormData,
@@ -117,6 +182,17 @@ export async function createFinanceInvoiceAction(
       notes: parsedHeader.notes,
       firstLine: lines[0],
     });
+    await recordAuditEvent({
+      companyId: ctx.companyId,
+      entityType: EntityType.INVOICE,
+      entityId: created.id,
+      action: ActivityAction.CREATE,
+      shipmentId: created.shipmentId,
+      customerId: created.customerId,
+      summary: `Invoice ${created.invoiceNumber} created.`,
+      after: created as unknown as Record<string, unknown>,
+      actor: getAuditActor(ctx),
+    });
 
     for (const line of lines.slice(1)) {
       await addInvoiceLine({
@@ -137,11 +213,77 @@ export async function createFinanceInvoiceAction(
       dueDate: parsedHeader.dueDate,
       notes: parsedHeader.notes,
     });
+    const afterInvoice = await prisma.invoice.findFirst({
+      where: {
+        id: created.id,
+        companyId: ctx.companyId,
+      },
+      select: {
+        id: true,
+        shipmentId: true,
+        customerId: true,
+        invoiceNumber: true,
+        currencyCode: true,
+        issueDate: true,
+        dueDate: true,
+        status: true,
+        notes: true,
+        subtotal: true,
+        taxes: true,
+        total: true,
+        lines: {
+          select: {
+            description: true,
+            amount: true,
+            type: true,
+          },
+          orderBy: {
+            createdAt: "asc",
+          },
+        },
+      },
+    });
+    if (!afterInvoice) {
+      throw new Error("Invoice not found after creation");
+    }
+    await recordEntityDiff({
+      companyId: ctx.companyId,
+      entityType: EntityType.INVOICE,
+      entityId: created.id,
+      shipmentId: created.shipmentId,
+      customerId: created.customerId,
+      before: {
+        invoiceNumber: created.invoiceNumber,
+        status: created.status,
+        subtotal: created.subtotal,
+        taxes: created.taxes,
+        total: created.total,
+      },
+      after: afterInvoice as unknown as Record<string, unknown>,
+      trackedFields: [
+        "invoiceNumber",
+        "currencyCode",
+        "issueDate",
+        "dueDate",
+        "status",
+        "subtotal",
+        "taxes",
+        "total",
+        "notes",
+        "lines",
+      ],
+      actor: getAuditActor(ctx),
+      fallbackSummary: `Invoice ${created.invoiceNumber} initialized.`,
+    });
 
-    revalidatePath("/finance");
-    revalidatePath("/finance/invoices");
-    revalidatePath(`/finance/invoices/${created.id}`);
-    revalidatePath("/finance/ar");
+    await runAlertChecksForInvoiceMutation({
+      companyId: ctx.companyId,
+      shipmentId: parsedHeader.shipmentId,
+    });
+    revalidateCoreFinanceSurfaces({
+      shipmentId: parsedHeader.shipmentId,
+      invoiceId: created.id,
+    });
     return { success: true };
   } catch (error) {
     return {
@@ -171,6 +313,40 @@ export async function updateFinanceInvoiceAction(
       notes: formData.get("notes") || undefined,
     });
     const lines = parseInvoiceLines(formData);
+
+    const beforeInvoice = await prisma.invoice.findFirst({
+      where: {
+        id: invoiceId,
+        companyId: ctx.companyId,
+      },
+      select: {
+        id: true,
+        shipmentId: true,
+        customerId: true,
+        invoiceNumber: true,
+        currencyCode: true,
+        issueDate: true,
+        dueDate: true,
+        status: true,
+        notes: true,
+        subtotal: true,
+        taxes: true,
+        total: true,
+        lines: {
+          select: {
+            description: true,
+            amount: true,
+            type: true,
+          },
+          orderBy: {
+            createdAt: "asc",
+          },
+        },
+      },
+    });
+    if (!beforeInvoice) {
+      throw new Error("Invoice not found");
+    }
 
     await prisma.$transaction(async (tx) => {
       const existing = await tx.invoice.findFirst({
@@ -251,12 +427,70 @@ export async function updateFinanceInvoiceAction(
         },
       });
     });
+    const afterInvoice = await prisma.invoice.findFirst({
+      where: {
+        id: invoiceId,
+        companyId: ctx.companyId,
+      },
+      select: {
+        id: true,
+        shipmentId: true,
+        customerId: true,
+        invoiceNumber: true,
+        currencyCode: true,
+        issueDate: true,
+        dueDate: true,
+        status: true,
+        notes: true,
+        subtotal: true,
+        taxes: true,
+        total: true,
+        lines: {
+          select: {
+            description: true,
+            amount: true,
+            type: true,
+          },
+          orderBy: {
+            createdAt: "asc",
+          },
+        },
+      },
+    });
+    if (!afterInvoice) {
+      throw new Error("Invoice not found after update");
+    }
+    await recordEntityDiff({
+      companyId: ctx.companyId,
+      entityType: EntityType.INVOICE,
+      entityId: invoiceId,
+      shipmentId: afterInvoice.shipmentId,
+      customerId: afterInvoice.customerId,
+      before: beforeInvoice as unknown as Record<string, unknown>,
+      after: afterInvoice as unknown as Record<string, unknown>,
+      trackedFields: [
+        "invoiceNumber",
+        "currencyCode",
+        "issueDate",
+        "dueDate",
+        "status",
+        "subtotal",
+        "taxes",
+        "total",
+        "notes",
+        "lines",
+      ],
+      actor: getAuditActor(ctx),
+    });
 
-    revalidatePath("/finance");
-    revalidatePath("/finance/invoices");
-    revalidatePath(`/finance/invoices/${invoiceId}`);
-    revalidatePath(`/finance/invoices/${invoiceId}/edit`);
-    revalidatePath("/finance/ar");
+    await runAlertChecksForInvoiceMutation({
+      companyId: ctx.companyId,
+      shipmentId: parsedHeader.shipmentId,
+    });
+    revalidateCoreFinanceSurfaces({
+      shipmentId: parsedHeader.shipmentId,
+      invoiceId,
+    });
     return { success: true };
   } catch (error) {
     return {
@@ -306,14 +540,73 @@ async function mutateInvoiceStatus(
     if (!invoiceId) {
       throw new Error("Invoice id is required");
     }
+    const before = await prisma.invoice.findFirst({
+      where: {
+        id: invoiceId,
+        companyId: ctx.companyId,
+      },
+      select: {
+        id: true,
+        shipmentId: true,
+        customerId: true,
+        status: true,
+        invoiceNumber: true,
+      },
+    });
+    if (!before) {
+      throw new Error("Invoice not found");
+    }
     const updated = await mutation({
       companyId: ctx.companyId,
       invoiceId,
     });
-    revalidatePath("/finance/invoices");
-    revalidatePath(`/finance/invoices/${updated.id}`);
-    revalidatePath("/finance/ar");
-    revalidatePath(`/shipments/${updated.shipmentId}`);
+    const after = await prisma.invoice.findFirst({
+      where: {
+        id: updated.id,
+        companyId: ctx.companyId,
+      },
+      select: {
+        id: true,
+        shipmentId: true,
+        customerId: true,
+        status: true,
+        invoiceNumber: true,
+      },
+    });
+    if (!after) {
+      await recordAuditEvent({
+        companyId: ctx.companyId,
+        entityType: EntityType.INVOICE,
+        entityId: updated.id,
+        action: ActivityAction.DELETE,
+        shipmentId: before.shipmentId,
+        customerId: before.customerId,
+        summary: `Invoice ${before.invoiceNumber} deleted.`,
+        before: before as unknown as Record<string, unknown>,
+        actor: getAuditActor(ctx),
+      });
+    } else {
+      await recordEntityDiff({
+        companyId: ctx.companyId,
+        entityType: EntityType.INVOICE,
+        entityId: updated.id,
+        shipmentId: after.shipmentId,
+        customerId: after.customerId,
+        before: before as unknown as Record<string, unknown>,
+        after: after as unknown as Record<string, unknown>,
+        trackedFields: ["status"],
+        actor: getAuditActor(ctx),
+        fallbackSummary: `Invoice ${after.invoiceNumber} updated.`,
+      });
+    }
+    await runAlertChecksForInvoiceMutation({
+      companyId: ctx.companyId,
+      shipmentId: updated.shipmentId,
+    });
+    revalidateCoreFinanceSurfaces({
+      shipmentId: updated.shipmentId,
+      invoiceId: updated.id,
+    });
     return { success: true };
   } catch (error) {
     return {
@@ -334,7 +627,327 @@ export async function markFinanceInvoicePaidAction(
   _prevState: FinanceActionState,
   formData: FormData,
 ): Promise<FinanceActionState> {
-  return mutateInvoiceStatus(formData, markInvoicePaid, "EDIT");
+  return registerFinanceInvoicePaymentAction(_prevState, formData);
+}
+
+function defaultPaymentDate() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+export async function registerFinanceInvoicePaymentAction(
+  _prevState: FinanceActionState,
+  formData: FormData,
+): Promise<FinanceActionState> {
+  try {
+    const ctx = await enforceActionPermission("REVENUE", "EDIT");
+    const parsed = registerInvoicePaymentSchema.parse({
+      invoiceId: String(formData.get("invoiceId") || formData.get("id") || "").trim(),
+      amount: formData.get("amount") ? Number(formData.get("amount")) : undefined,
+      paymentDate: String(formData.get("paymentDate") || defaultPaymentDate()),
+      method: formData.get("method") ? String(formData.get("method")) : undefined,
+      reference: formData.get("reference") ? String(formData.get("reference")) : undefined,
+      notes: formData.get("notes") ? String(formData.get("notes")) : undefined,
+    });
+
+    const invoice = await prisma.invoice.findFirst({
+      where: {
+        id: parsed.invoiceId,
+        companyId: ctx.companyId,
+      },
+      select: {
+        id: true,
+        currencyCode: true,
+        shipmentId: true,
+        total: true,
+        payments: {
+          select: {
+            amount: true,
+          },
+        },
+      },
+    });
+    if (!invoice) {
+      throw new Error("Invoice not found");
+    }
+    const totalAmount = Number(invoice.total);
+    const paidAmount = invoice.payments.reduce((sum, payment) => sum + Number(payment.amount), 0);
+    const outstandingAmount = Math.max(totalAmount - paidAmount, 0);
+    if (outstandingAmount <= 0) {
+      throw new Error("Invoice is already fully paid");
+    }
+    const amountToRegister = parsed.amount ?? outstandingAmount;
+
+    await registerEntityPayment({
+      companyId: ctx.companyId,
+      branchId: ctx.branchId ?? null,
+      entityType: PaymentEntityType.INVOICE,
+      entityId: invoice.id,
+      amount: amountToRegister,
+      currencyCode: invoice.currencyCode,
+      paymentDate: parsed.paymentDate || defaultPaymentDate(),
+      method: parsed.method,
+      reference: parsed.reference,
+      notes: parsed.notes,
+      actor: {
+        actorId: ctx.userId,
+      },
+    });
+
+    await runAlertChecksForInvoiceMutation({
+      companyId: ctx.companyId,
+      shipmentId: invoice.shipmentId,
+    });
+    revalidateCoreFinanceSurfaces({
+      shipmentId: invoice.shipmentId,
+      invoiceId: invoice.id,
+    });
+    return { success: true };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Unable to register invoice payment",
+    };
+  }
+}
+
+export async function registerFinanceShipmentCostPaymentAction(
+  _prevState: FinanceActionState,
+  formData: FormData,
+): Promise<FinanceActionState> {
+  try {
+    const ctx = await enforceActionPermission("EXPENSES", "EDIT");
+    const parsed = registerPayablePaymentSchema.parse({
+      entityId: String(formData.get("entityId") || formData.get("id") || "").trim(),
+      amount: formData.get("amount") ? Number(formData.get("amount")) : undefined,
+      paymentDate: String(formData.get("paymentDate") || defaultPaymentDate()),
+      method: formData.get("method") ? String(formData.get("method")) : undefined,
+      reference: formData.get("reference") ? String(formData.get("reference")) : undefined,
+      notes: formData.get("notes") ? String(formData.get("notes")) : undefined,
+    });
+
+    const cost = await prisma.shipmentCost.findFirst({
+      where: {
+        id: parsed.entityId,
+        companyId: ctx.companyId,
+      },
+      select: {
+        id: true,
+        currencyCode: true,
+        shipmentId: true,
+        amount: true,
+        payments: {
+          select: {
+            amount: true,
+          },
+        },
+      },
+    });
+    if (!cost) {
+      throw new Error("Shipment cost not found");
+    }
+    const totalAmount = Number(cost.amount);
+    const paidAmount = cost.payments.reduce((sum, payment) => sum + Number(payment.amount), 0);
+    const outstandingAmount = Math.max(totalAmount - paidAmount, 0);
+    if (outstandingAmount <= 0) {
+      throw new Error("Shipment cost is already fully paid");
+    }
+    const amountToRegister = parsed.amount ?? outstandingAmount;
+
+    await registerEntityPayment({
+      companyId: ctx.companyId,
+      branchId: ctx.branchId ?? null,
+      entityType: PaymentEntityType.SHIPMENT_COST,
+      entityId: cost.id,
+      amount: amountToRegister,
+      currencyCode: cost.currencyCode,
+      paymentDate: parsed.paymentDate || defaultPaymentDate(),
+      method: parsed.method,
+      reference: parsed.reference,
+      notes: parsed.notes,
+      actor: {
+        actorId: ctx.userId,
+      },
+    });
+    await runAlertChecksForShipmentUpdate({
+      companyId: ctx.companyId,
+      shipmentId: cost.shipmentId,
+    });
+
+    revalidateCoreFinanceSurfaces({
+      shipmentId: cost.shipmentId,
+    });
+    return { success: true };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Unable to register shipment cost payment",
+    };
+  }
+}
+
+export async function registerFinanceExpensePaymentAction(
+  _prevState: FinanceActionState,
+  formData: FormData,
+): Promise<FinanceActionState> {
+  try {
+    const ctx = await enforceActionPermission("EXPENSES", "EDIT");
+    const parsed = registerPayablePaymentSchema.parse({
+      entityId: String(formData.get("entityId") || formData.get("id") || "").trim(),
+      amount: formData.get("amount") ? Number(formData.get("amount")) : undefined,
+      paymentDate: String(formData.get("paymentDate") || defaultPaymentDate()),
+      method: formData.get("method") ? String(formData.get("method")) : undefined,
+      reference: formData.get("reference") ? String(formData.get("reference")) : undefined,
+      notes: formData.get("notes") ? String(formData.get("notes")) : undefined,
+    });
+
+    const expense = await prisma.expense.findFirst({
+      where: {
+        id: parsed.entityId,
+        companyId: ctx.companyId,
+      },
+      select: {
+        id: true,
+        currencyCode: true,
+        shipmentId: true,
+        amount: true,
+        payments: {
+          select: {
+            amount: true,
+          },
+        },
+      },
+    });
+    if (!expense) {
+      throw new Error("Shipment expense not found");
+    }
+    const totalAmount = Number(expense.amount);
+    const paidAmount = expense.payments.reduce((sum, payment) => sum + Number(payment.amount), 0);
+    const outstandingAmount = Math.max(totalAmount - paidAmount, 0);
+    if (outstandingAmount <= 0) {
+      throw new Error("Shipment expense is already fully paid");
+    }
+    const amountToRegister = parsed.amount ?? outstandingAmount;
+
+    await registerEntityPayment({
+      companyId: ctx.companyId,
+      branchId: ctx.branchId ?? null,
+      entityType: PaymentEntityType.EXPENSE,
+      entityId: expense.id,
+      amount: amountToRegister,
+      currencyCode: expense.currencyCode,
+      paymentDate: parsed.paymentDate || defaultPaymentDate(),
+      method: parsed.method,
+      reference: parsed.reference,
+      notes: parsed.notes,
+      actor: {
+        actorId: ctx.userId,
+      },
+    });
+    await runAlertChecksForShipmentUpdate({
+      companyId: ctx.companyId,
+      shipmentId: expense.shipmentId,
+    });
+
+    revalidateCoreFinanceSurfaces({
+      shipmentId: expense.shipmentId,
+    });
+    return { success: true };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Unable to register shipment expense payment",
+    };
+  }
+}
+
+export async function registerFinanceGeneralExpensePaymentAction(
+  _prevState: FinanceActionState,
+  formData: FormData,
+): Promise<FinanceActionState> {
+  try {
+    const ctx = await enforceActionPermission("EXPENSES", "EDIT");
+    const parsed = registerPayablePaymentSchema.parse({
+      entityId: String(formData.get("entityId") || formData.get("id") || "").trim(),
+      amount: formData.get("amount") ? Number(formData.get("amount")) : undefined,
+      paymentDate: String(formData.get("paymentDate") || defaultPaymentDate()),
+      method: formData.get("method") ? String(formData.get("method")) : undefined,
+      reference: formData.get("reference") ? String(formData.get("reference")) : undefined,
+      notes: formData.get("notes") ? String(formData.get("notes")) : undefined,
+    });
+
+    const expense = await prisma.generalExpense.findFirst({
+      where: {
+        id: parsed.entityId,
+        companyId: ctx.companyId,
+      },
+      select: {
+        id: true,
+        currencyCode: true,
+        amount: true,
+        payments: {
+          select: {
+            amount: true,
+          },
+        },
+      },
+    });
+    if (!expense) {
+      throw new Error("General expense not found");
+    }
+    const totalAmount = Number(expense.amount);
+    const paidAmount = expense.payments.reduce((sum, payment) => sum + Number(payment.amount), 0);
+    const outstandingAmount = Math.max(totalAmount - paidAmount, 0);
+    if (outstandingAmount <= 0) {
+      throw new Error("General expense is already fully paid");
+    }
+    const amountToRegister = parsed.amount ?? outstandingAmount;
+
+    await registerEntityPayment({
+      companyId: ctx.companyId,
+      branchId: ctx.branchId ?? null,
+      entityType: PaymentEntityType.GENERAL_EXPENSE,
+      entityId: expense.id,
+      amount: amountToRegister,
+      currencyCode: expense.currencyCode,
+      paymentDate: parsed.paymentDate || defaultPaymentDate(),
+      method: parsed.method,
+      reference: parsed.reference,
+      notes: parsed.notes,
+      actor: {
+        actorId: ctx.userId,
+      },
+    });
+
+    revalidateCoreFinanceSurfaces({
+      includeExpenses: true,
+    });
+    return { success: true };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Unable to register general expense payment",
+    };
+  }
+}
+
+export async function registerFinancePayablePaymentAction(
+  _prevState: FinanceActionState,
+  formData: FormData,
+): Promise<FinanceActionState> {
+  const entityType = String(formData.get("entityType") || "").trim();
+  if (entityType === PaymentEntityType.SHIPMENT_COST) {
+    return registerFinanceShipmentCostPaymentAction(_prevState, formData);
+  }
+  if (entityType === PaymentEntityType.EXPENSE) {
+    return registerFinanceExpensePaymentAction(_prevState, formData);
+  }
+  if (entityType === PaymentEntityType.GENERAL_EXPENSE) {
+    return registerFinanceGeneralExpensePaymentAction(_prevState, formData);
+  }
+  return {
+    success: false,
+    error: "Unsupported payable payment entity type",
+  };
 }
 
 export async function cancelFinanceInvoiceAction(
@@ -394,25 +1007,60 @@ export async function upsertGeneralExpenseAction(
     if (parsed.id) {
       const existing = await prisma.generalExpense.findFirst({
         where: { id: parsed.id, companyId: ctx.companyId },
-        select: { id: true },
+        select: {
+          id: true,
+          conceptCategory: true,
+          customConcept: true,
+          amount: true,
+          currencyCode: true,
+          dueDate: true,
+          status: true,
+          notes: true,
+        },
       });
       if (!existing) {
         throw new Error("General expense not found");
       }
-      await prisma.generalExpense.update({
+      const updated = await prisma.generalExpense.update({
         where: { id: existing.id },
         data: payload,
       });
+      await recordEntityDiff({
+        companyId: ctx.companyId,
+        entityType: EntityType.EXPENSE,
+        entityId: existing.id,
+        before: existing as unknown as Record<string, unknown>,
+        after: updated as unknown as Record<string, unknown>,
+        trackedFields: [
+          "conceptCategory",
+          "customConcept",
+          "amount",
+          "currencyCode",
+          "dueDate",
+          "status",
+          "notes",
+        ],
+        actor: getAuditActor(ctx),
+        fallbackSummary: "General expense updated.",
+      });
     } else {
-      await prisma.generalExpense.create({
+      const created = await prisma.generalExpense.create({
         data: payload,
+      });
+      await recordAuditEvent({
+        companyId: ctx.companyId,
+        entityType: EntityType.EXPENSE,
+        entityId: created.id,
+        action: ActivityAction.CREATE,
+        summary: "General expense created.",
+        after: created as unknown as Record<string, unknown>,
+        actor: getAuditActor(ctx),
       });
     }
 
-    revalidatePath("/finance");
-    revalidatePath("/finance/expenses");
-    revalidatePath("/finance/ap");
-    revalidatePath("/finance/forecast");
+    revalidateCoreFinanceSurfaces({
+      includeExpenses: true,
+    });
     return { success: true };
   } catch (error) {
     return {
@@ -437,16 +1085,30 @@ export async function deleteGeneralExpenseAction(
         id,
         companyId: ctx.companyId,
       },
-      select: { id: true },
+      select: {
+        id: true,
+        conceptCategory: true,
+        amount: true,
+        currencyCode: true,
+        status: true,
+      },
     });
     if (!existing) {
       throw new Error("General expense not found");
     }
     await prisma.generalExpense.delete({ where: { id: existing.id } });
-    revalidatePath("/finance");
-    revalidatePath("/finance/expenses");
-    revalidatePath("/finance/ap");
-    revalidatePath("/finance/forecast");
+    await recordAuditEvent({
+      companyId: ctx.companyId,
+      entityType: EntityType.EXPENSE,
+      entityId: existing.id,
+      action: ActivityAction.DELETE,
+      summary: `General expense ${existing.conceptCategory} deleted.`,
+      before: existing as unknown as Record<string, unknown>,
+      actor: getAuditActor(ctx),
+    });
+    revalidateCoreFinanceSurfaces({
+      includeExpenses: true,
+    });
     return { success: true };
   } catch (error) {
     return {

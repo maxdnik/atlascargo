@@ -24,16 +24,10 @@ import {
 } from "@prisma/client";
 
 import type { ShipmentActionState } from "@/app/(dashboard)/shipments/actions";
-import {
-  cancelFinanceInvoiceAction,
-  createFinanceInvoiceAction,
-  deleteFinanceInvoiceAction,
-  issueFinanceInvoiceAfipAction,
-  markFinanceInvoicePaidAction,
-  updateFinanceInvoiceAction,
-} from "@/app/(dashboard)/finance/actions";
 import { MilestoneTimeline } from "@/components/shipments/milestone-timeline";
+import { ShipmentControlTimeline } from "@/components/shipments/shipment-control-timeline";
 import { ShipmentForm } from "@/components/shipments/shipment-form";
+import type { ShipmentTimelineEvent } from "@/lib/shipment-timeline";
 
 type ShipmentDetailViewModel = {
   id: string;
@@ -83,23 +77,58 @@ type ShipmentDetailViewModel = {
   containerCount?: number | null;
   containerType?: string | null;
   notes?: string | null;
-  quoteFinancials: {
-    hasQuote: boolean;
-    quotedSell: number | null;
-    quotedCost: number | null;
-    quotedMarginAmount: number | null;
-    quotedMarginPct: number | null;
-  };
-  actualFinancials: {
-    invoicedRevenue: number;
-    totalShipmentCost: number;
-    grossProfit: number;
-    marginPct: number | null;
-    varianceMarginPct: number | null;
-    hasRevenue: boolean;
-    hasCosts: boolean;
-    hasFinancials: boolean;
-    marginDeteriorated: boolean;
+  quoteSnapshotCapturedAt?: string | null;
+  quoteContinuity: {
+    quoted: {
+      revenue: number | null;
+      cost: number | null;
+      grossProfit: number | null;
+      marginPercent: number | null;
+      transitTimeDays: number | null;
+      mode: string | null;
+      direction: string | null;
+      origin: string | null;
+      destination: string | null;
+      chargeBreakdown: Array<{
+        concept: string;
+        chargeType: string | null;
+        buyAmount: number;
+        sellAmount: number;
+        currencyCode: string;
+      }>;
+      supplierSuggestions: {
+        suggestedCarrier: string | null;
+        suggestedSupplier: string | null;
+        serviceLevelAssumption: string | null;
+        routeAssumption: string | null;
+      } | null;
+      assumptionsNotes: string | null;
+    };
+    actual: {
+      revenue: number;
+      cost: number;
+      grossProfit: number;
+      marginPercent: number | null;
+      transitTimeDays: number | null;
+      supplierCarrier: string | null;
+      supplierName: string | null;
+      origin: string | null;
+      destination: string | null;
+    };
+    variance: {
+      revenue: number | null;
+      cost: number | null;
+      grossProfit: number | null;
+      marginPercent: number | null;
+      transitTimeDays: number | null;
+    };
+    transitPerformanceStatus: "UNKNOWN" | "ON_TARGET" | "FASTER_THAN_QUOTED" | "SLOWER_THAN_QUOTED";
+    warnings: {
+      marginDroppedBelowQuote: boolean;
+      costsExceedQuotedEstimate: boolean;
+      transitSlowerThanQuoted: boolean;
+      supplierDifferentFromSuggestion: boolean;
+    };
   };
   milestones: Array<{
     id: string;
@@ -167,6 +196,9 @@ type ShipmentDetailViewModel = {
     afipCAE?: string | null;
     afipNumber?: string | null;
     afipStatus?: string | null;
+    paidAmount: number;
+    outstandingAmount: number;
+    paymentStatus: "UNPAID" | "PARTIALLY_PAID" | "PAID";
     lines: Array<{
       id: string;
       description: string;
@@ -174,6 +206,7 @@ type ShipmentDetailViewModel = {
       type: InvoiceLineType;
     }>;
   }>;
+  controlTimeline: ShipmentTimelineEvent[];
 };
 
 type Props = {
@@ -217,7 +250,7 @@ type Props = {
     createInvoiceDirectAction: (formData: FormData) => Promise<void>;
     upsertInvoiceDirectAction: (formData: FormData) => Promise<void>;
     issueInvoiceAFIPDirectAction: (formData: FormData) => Promise<void>;
-    markInvoicePaidDirectAction: (formData: FormData) => Promise<void>;
+    registerInvoicePaymentDirectAction: (formData: FormData) => Promise<void>;
     cancelInvoiceDirectAction: (formData: FormData) => Promise<void>;
     deleteInvoiceDirectAction: (formData: FormData) => Promise<void>;
   };
@@ -249,6 +282,40 @@ function money(value: number) {
 
 function pct(value: number | null) {
   return value === null ? "-" : `${value.toFixed(2)}%`;
+}
+
+function varianceLabel(value: number | null, kind: "currency" | "points" | "days") {
+  if (value === null) return "-";
+  if (kind === "currency") {
+    return `${value > 0 ? "+" : value < 0 ? "-" : ""}${money(Math.abs(value))}`;
+  }
+  if (kind === "points") {
+    return `${value > 0 ? "+" : value < 0 ? "-" : ""}${Math.abs(value).toFixed(2)} pts`;
+  }
+  return `${value > 0 ? "+" : value < 0 ? "-" : ""}${Math.abs(value).toFixed(0)} days`;
+}
+
+function varianceClass(value: number | null, inverse = false) {
+  if (value === null || value === 0) return "text-slate-600";
+  const positive = value > 0;
+  if (inverse) {
+    return positive ? "text-rose-700" : "text-emerald-700";
+  }
+  return positive ? "text-emerald-700" : "text-rose-700";
+}
+
+function transitStatusLabel(status: ShipmentDetailViewModel["quoteContinuity"]["transitPerformanceStatus"]) {
+  if (status === "ON_TARGET") return "On target";
+  if (status === "FASTER_THAN_QUOTED") return "Faster than quoted";
+  if (status === "SLOWER_THAN_QUOTED") return "Slower than quoted";
+  return "Unknown";
+}
+
+function transitStatusClass(status: ShipmentDetailViewModel["quoteContinuity"]["transitPerformanceStatus"]) {
+  if (status === "ON_TARGET") return "bg-sky-100 text-sky-700";
+  if (status === "FASTER_THAN_QUOTED") return "bg-emerald-100 text-emerald-700";
+  if (status === "SLOWER_THAN_QUOTED") return "bg-rose-100 text-rose-700";
+  return "bg-slate-100 text-slate-700";
 }
 
 function dateLabel(value?: string | Date | null, withTime = false) {
@@ -354,9 +421,6 @@ export function ShipmentDetailClient({
     canEditRevenue,
     canDeleteRevenue,
     canViewExpenses,
-    canCreateExpenses,
-    canEditExpenses,
-    canDeleteExpenses,
     canCreateShipmentCosts,
     canEditShipmentCosts,
     canDeleteShipmentCosts,
@@ -376,7 +440,7 @@ export function ShipmentDetailClient({
     createInvoiceDirectAction: createInvoiceAction,
     upsertInvoiceDirectAction: upsertInvoiceAction,
     issueInvoiceAFIPDirectAction: issueInvoiceAFIPAction,
-    markInvoicePaidDirectAction: markInvoicePaidAction,
+    registerInvoicePaymentDirectAction: registerInvoicePaymentAction,
     cancelInvoiceDirectAction: cancelInvoiceAction,
     deleteInvoiceDirectAction: deleteInvoiceAction,
   } = actions;
@@ -605,75 +669,215 @@ export function ShipmentDetailClient({
 
         <div className="space-y-5">
           {canViewFinancialSummary ? (
-            <Card title="Financial summary" subtitle="Quoted vs actual performance">
-              <div className="space-y-2 text-sm">
-                {shipment.quoteFinancials.hasQuote ? (
-                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                    <p className="text-xs uppercase tracking-wide text-slate-500">Quoted</p>
-                    <p className="mt-1">Sell: <span className="font-semibold text-slate-900">{money(shipment.quoteFinancials.quotedSell ?? 0)}</span></p>
-                    <p>Cost: <span className="font-semibold text-slate-900">{money(shipment.quoteFinancials.quotedCost ?? 0)}</span></p>
-                    <p>
-                      Margin:{" "}
-                      <span className="font-semibold text-slate-900">
-                        {money(shipment.quoteFinancials.quotedMarginAmount ?? 0)} ({pct(shipment.quoteFinancials.quotedMarginPct)})
-                      </span>
+            <Card title="Originally Quoted vs Actual" subtitle="Commercial and operational continuity">
+              {shipment.quoteContinuity.quoted.revenue === null ? (
+                <Empty label="No quote snapshot available yet for continuity comparison." />
+              ) : (
+                <div className="space-y-3 text-sm">
+                  {shipment.quoteSnapshotCapturedAt ? (
+                    <p className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
+                      Captured from quote on {dateLabel(shipment.quoteSnapshotCapturedAt, true)}.
                     </p>
+                  ) : null}
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Commercial</p>
+                    <div className="mt-2 space-y-1.5">
+                      <p>
+                        Quoted Revenue:{" "}
+                        <span className="font-semibold text-slate-900">
+                          {money(shipment.quoteContinuity.quoted.revenue ?? 0)}
+                        </span>
+                      </p>
+                      <p>
+                        Actual Revenue:{" "}
+                        <span className="font-semibold text-slate-900">
+                          {money(shipment.quoteContinuity.actual.revenue)}
+                        </span>
+                      </p>
+                      <p>
+                        Revenue Variance:{" "}
+                        <span className={varianceClass(shipment.quoteContinuity.variance.revenue)}>
+                          {varianceLabel(shipment.quoteContinuity.variance.revenue, "currency")}
+                        </span>
+                      </p>
+                      <p>
+                        Quoted Cost:{" "}
+                        <span className="font-semibold text-slate-900">
+                          {money(shipment.quoteContinuity.quoted.cost ?? 0)}
+                        </span>
+                      </p>
+                      <p>
+                        Actual Cost:{" "}
+                        <span className="font-semibold text-slate-900">
+                          {money(shipment.quoteContinuity.actual.cost)}
+                        </span>
+                      </p>
+                      <p>
+                        Cost Variance:{" "}
+                        <span className={varianceClass(shipment.quoteContinuity.variance.cost, true)}>
+                          {varianceLabel(shipment.quoteContinuity.variance.cost, "currency")}
+                        </span>
+                      </p>
+                      <p>
+                        Quoted Gross Profit:{" "}
+                        <span className="font-semibold text-slate-900">
+                          {money(shipment.quoteContinuity.quoted.grossProfit ?? 0)}
+                        </span>
+                      </p>
+                      <p>
+                        Actual Gross Profit:{" "}
+                        <span className="font-semibold text-slate-900">
+                          {money(shipment.quoteContinuity.actual.grossProfit)}
+                        </span>
+                      </p>
+                      <p>
+                        Profit Variance:{" "}
+                        <span className={varianceClass(shipment.quoteContinuity.variance.grossProfit)}>
+                          {varianceLabel(shipment.quoteContinuity.variance.grossProfit, "currency")}
+                        </span>
+                      </p>
+                      <p>
+                        Quoted Margin %:{" "}
+                        <span className="font-semibold text-slate-900">
+                          {pct(shipment.quoteContinuity.quoted.marginPercent)}
+                        </span>
+                      </p>
+                      <p>
+                        Actual Margin %:{" "}
+                        <span className="font-semibold text-slate-900">
+                          {pct(shipment.quoteContinuity.actual.marginPercent)}
+                        </span>
+                      </p>
+                      <p>
+                        Margin Variance:{" "}
+                        <span className={varianceClass(shipment.quoteContinuity.variance.marginPercent)}>
+                          {varianceLabel(shipment.quoteContinuity.variance.marginPercent, "points")}
+                        </span>
+                      </p>
+                    </div>
                   </div>
-                ) : (
-                  <Empty label="No linked quote for financial benchmark." />
-                )}
 
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                  <p className="text-xs uppercase tracking-wide text-slate-500">Actual</p>
-                  <p className="mt-1">
-                    Invoiced revenue:{" "}
-                    <span className="font-semibold text-slate-900">
-                      {money(shipment.actualFinancials.invoicedRevenue)}
-                    </span>
-                  </p>
-                  <p>
-                    Total shipment cost:{" "}
-                    <span className="font-semibold text-slate-900">
-                      {money(shipment.actualFinancials.totalShipmentCost)}
-                    </span>
-                  </p>
-                  <p>
-                    Gross Profit:{" "}
-                    <span
-                      className={`font-semibold ${
-                        shipment.actualFinancials.grossProfit < 0 ? "text-rose-700" : "text-slate-900"
-                      }`}
-                    >
-                      {money(shipment.actualFinancials.grossProfit)}
-                    </span>
-                  </p>
-                  <p>
-                    Margin: <span className="font-semibold text-slate-900">{pct(shipment.actualFinancials.marginPct)}</span>
-                  </p>
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Operational</p>
+                    <div className="mt-2 space-y-1.5">
+                      <p>
+                        Quoted Transit Time:{" "}
+                        <span className="font-semibold text-slate-900">
+                          {shipment.quoteContinuity.quoted.transitTimeDays === null
+                            ? "-"
+                            : `${shipment.quoteContinuity.quoted.transitTimeDays} days`}
+                        </span>
+                      </p>
+                      <p>
+                        Actual Transit Time:{" "}
+                        <span className="font-semibold text-slate-900">
+                          {shipment.quoteContinuity.actual.transitTimeDays === null
+                            ? "-"
+                            : `${shipment.quoteContinuity.actual.transitTimeDays} days`}
+                        </span>
+                      </p>
+                      <p>
+                        Transit Variance:{" "}
+                        <span className={varianceClass(shipment.quoteContinuity.variance.transitTimeDays)}>
+                          {varianceLabel(shipment.quoteContinuity.variance.transitTimeDays, "days")}
+                        </span>
+                      </p>
+                      <p>
+                        Transit Performance:{" "}
+                        <span
+                          className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${transitStatusClass(
+                            shipment.quoteContinuity.transitPerformanceStatus,
+                          )}`}
+                        >
+                          {transitStatusLabel(shipment.quoteContinuity.transitPerformanceStatus)}
+                        </span>
+                      </p>
+                      <p>
+                        Quoted Supplier / Carrier:{" "}
+                        <span className="font-semibold text-slate-900">
+                          {shipment.quoteContinuity.quoted.supplierSuggestions?.suggestedSupplier ??
+                            shipment.quoteContinuity.quoted.supplierSuggestions?.suggestedCarrier ??
+                            "-"}
+                        </span>
+                      </p>
+                      <p>
+                        Actual Supplier / Carrier:{" "}
+                        <span className="font-semibold text-slate-900">
+                          {shipment.quoteContinuity.actual.supplierName ??
+                            shipment.quoteContinuity.actual.supplierCarrier ??
+                            "-"}
+                        </span>
+                      </p>
+                      <p>
+                        Route (Quoted vs Actual):{" "}
+                        <span className="font-semibold text-slate-900">
+                          {(shipment.quoteContinuity.quoted.origin ?? "-") +
+                            " → " +
+                            (shipment.quoteContinuity.quoted.destination ?? "-")}
+                          {" / "}
+                          {(shipment.quoteContinuity.actual.origin ?? "-") +
+                            " → " +
+                            (shipment.quoteContinuity.actual.destination ?? "-")}
+                        </span>
+                      </p>
+                    </div>
+                  </div>
+
+                  {shipment.quoteContinuity.quoted.chargeBreakdown.length > 0 ? (
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        Quoted charge breakdown
+                      </p>
+                      <ul className="mt-2 space-y-1 text-xs text-slate-700">
+                        {shipment.quoteContinuity.quoted.chargeBreakdown.map((row, index) => (
+                          <li key={`${row.concept}-${index}`} className="flex items-center justify-between gap-2">
+                            <span>
+                              {row.concept}
+                              {row.chargeType ? ` (${row.chargeType})` : ""}
+                            </span>
+                            <span className="font-medium text-slate-900">
+                              {money(row.sellAmount)} / {money(row.buyAmount)}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+
+                  {shipment.quoteContinuity.quoted.assumptionsNotes ? (
+                    <p className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700">
+                      <span className="font-semibold text-slate-900">Quoted notes / assumptions:</span>{" "}
+                      {shipment.quoteContinuity.quoted.assumptionsNotes}
+                    </p>
+                  ) : null}
+                  {shipment.quoteSnapshotCapturedAt ? (
+                    <p className="text-[11px] text-slate-500">
+                      Snapshot captured: {dateLabel(shipment.quoteSnapshotCapturedAt, true)}
+                    </p>
+                  ) : null}
+
+                  {shipment.quoteContinuity.warnings.marginDroppedBelowQuote ? (
+                    <p className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                      Warning: actual margin is below quoted margin.
+                    </p>
+                  ) : null}
+                  {shipment.quoteContinuity.warnings.costsExceedQuotedEstimate ? (
+                    <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                      Warning: actual costs exceed quoted estimate by more than 10%.
+                    </p>
+                  ) : null}
+                  {shipment.quoteContinuity.warnings.transitSlowerThanQuoted ? (
+                    <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                      Warning: shipment transit is slower than quoted.
+                    </p>
+                  ) : null}
+                  {shipment.quoteContinuity.warnings.supplierDifferentFromSuggestion ? (
+                    <p className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-700">
+                      Note: operational supplier differs from quoted recommendation.
+                    </p>
+                  ) : null}
                 </div>
-
-                {shipment.actualFinancials.varianceMarginPct !== null ? (
-                  <p
-                    className={`rounded-xl border px-3 py-2 text-xs ${
-                      shipment.actualFinancials.varianceMarginPct < 0
-                        ? "border-rose-200 bg-rose-50 text-rose-700"
-                        : "border-emerald-200 bg-emerald-50 text-emerald-700"
-                    }`}
-                  >
-                    Margin variance vs quoted: {shipment.actualFinancials.varianceMarginPct.toFixed(2)} pts
-                  </p>
-                ) : null}
-                {!shipment.actualFinancials.hasFinancials ? (
-                  <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                    Incomplete profitability: add shipment costs and invoices.
-                  </p>
-                ) : null}
-                {shipment.actualFinancials.marginDeteriorated ? (
-                  <p className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
-                    Alert: actual gross profit is below quoted margin.
-                  </p>
-                ) : null}
-              </div>
+              )}
             </Card>
           ) : null}
 
@@ -1205,13 +1409,27 @@ export function ShipmentDetailClient({
                           </form>
                         ) : null}
                         {canEditInvoices ? (
-                          <form action={markInvoicePaidAction}>
+                          <form action={registerInvoicePaymentAction} className="flex items-center gap-2">
                             <input type="hidden" name="id" value={invoice.id} />
+                            <input
+                              type="number"
+                              name="amount"
+                              min="0.01"
+                              step="0.01"
+                              placeholder="Amount"
+                              className="w-24 rounded-lg border border-slate-200 px-2 py-1 text-xs"
+                            />
+                            <input
+                              type="date"
+                              name="paymentDate"
+                              defaultValue={new Date().toISOString().slice(0, 10)}
+                              className="rounded-lg border border-slate-200 px-2 py-1 text-xs"
+                            />
                             <button
                               type="submit"
                               className="rounded-lg border border-emerald-200 px-2.5 py-1 text-xs font-medium text-emerald-700 transition hover:bg-emerald-50"
                             >
-                              Mark paid
+                              Register payment
                             </button>
                           </form>
                         ) : null}
@@ -1319,6 +1537,10 @@ export function ShipmentDetailClient({
             comment: milestone.comment ?? null,
           }))}
         />
+      </Card>
+
+      <Card title="Shipment control timeline" subtitle="Unified chronological feed across operations, finance, documents, alerts, and system changes">
+        <ShipmentControlTimeline items={shipment.controlTimeline} />
       </Card>
 
       {canEditShipments ? (

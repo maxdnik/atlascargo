@@ -2,9 +2,10 @@
 
 import bcrypt from "bcryptjs";
 import { revalidatePath } from "next/cache";
-import { UserRole } from "@prisma/client";
+import { ActivityAction, ActivityActorType, EntityType, UserRole } from "@prisma/client";
 import { z } from "zod";
 
+import { recordAuditEvent, recordEntityDiff } from "@/lib/audit";
 import { enforceActionPermission } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 
@@ -76,6 +77,13 @@ async function syncUserRoleAssignment(companyId: string, userId: string, role: U
   });
 }
 
+function getAuditActor(ctx: { userId: string }) {
+  return {
+    actorType: ActivityActorType.USER,
+    actorId: ctx.userId,
+  };
+}
+
 export async function createAdminUserAction(
   _prevState: AdminUserActionState,
   formData: FormData,
@@ -109,20 +117,19 @@ export async function createAdminUserAction(
 
     await syncUserRoleAssignment(ctx.companyId, created.id, parsed.role);
 
-    await prisma.activityLog.create({
-      data: {
-        companyId: ctx.companyId,
-        entityType: "USER",
-        entityId: created.id,
-        action: "CREATE",
-        actorId: ctx.userId,
-        afterJson: {
-          name: parsed.name,
-          email: parsed.email.toLowerCase(),
-          role: parsed.role,
-          isActive: parsed.isActive,
-        },
+    await recordAuditEvent({
+      companyId: ctx.companyId,
+      entityType: EntityType.USER,
+      entityId: created.id,
+      action: ActivityAction.CREATE,
+      summary: `User ${parsed.name} created.`,
+      after: {
+        name: parsed.name,
+        email: parsed.email.toLowerCase(),
+        role: parsed.role,
+        isActive: parsed.isActive,
       },
+      actor: getAuditActor(ctx),
     });
 
     revalidatePath("/admin/users");
@@ -187,16 +194,16 @@ export async function updateAdminUserAction(
 
     await syncUserRoleAssignment(ctx.companyId, updated.id, parsed.role);
 
-    await prisma.activityLog.create({
-      data: {
-        companyId: ctx.companyId,
-        entityType: "USER",
-        entityId: updated.id,
-        action: "UPDATE",
-        actorId: ctx.userId,
-        beforeJson: existing,
-        afterJson: updated,
-      },
+    await recordEntityDiff({
+      companyId: ctx.companyId,
+      entityType: EntityType.USER,
+      entityId: updated.id,
+      action: ActivityAction.UPDATE,
+      before: existing as unknown as Record<string, unknown>,
+      after: updated as unknown as Record<string, unknown>,
+      trackedFields: ["name", "email", "role", "isActive"],
+      actor: getAuditActor(ctx),
+      fallbackSummary: `User ${updated.name} updated.`,
     });
 
     revalidatePath("/admin/users");
@@ -236,16 +243,19 @@ export async function toggleAdminUserActiveAction(formData: FormData): Promise<v
     data: { isActive: !existing.isActive },
   });
 
-  await prisma.activityLog.create({
-    data: {
-      companyId: ctx.companyId,
-      entityType: "USER",
-      entityId: existing.id,
-      action: "UPDATE",
-      actorId: ctx.userId,
-      beforeJson: { isActive: existing.isActive },
-      afterJson: { isActive: !existing.isActive },
+  await recordAuditEvent({
+    companyId: ctx.companyId,
+    entityType: EntityType.USER,
+    entityId: existing.id,
+    action: ActivityAction.STATUS_CHANGE,
+    field: "isActive",
+    oldValue: String(existing.isActive),
+    newValue: String(!existing.isActive),
+    summary: `User ${existing.id} ${existing.isActive ? "deactivated" : "activated"}.`,
+    metadata: {
+      source: "toggleAdminUserActiveAction",
     },
+    actor: getAuditActor(ctx),
   });
 
   revalidatePath("/admin/users");
@@ -283,15 +293,16 @@ export async function resetAdminUserPasswordAction(
       data: { passwordHash },
     });
 
-    await prisma.activityLog.create({
-      data: {
-        companyId: ctx.companyId,
-        entityType: "USER",
-        entityId: existing.id,
-        action: "UPDATE",
-        actorId: ctx.userId,
-        afterJson: { passwordReset: true },
+    await recordAuditEvent({
+      companyId: ctx.companyId,
+      entityType: EntityType.USER,
+      entityId: existing.id,
+      action: ActivityAction.UPDATE,
+      summary: "User password reset.",
+      metadata: {
+        passwordReset: true,
       },
+      actor: getAuditActor(ctx),
     });
 
     revalidatePath(`/admin/users/${existing.id}`);
