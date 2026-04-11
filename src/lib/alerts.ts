@@ -4,6 +4,7 @@ import { evaluateCompanyAlerts, type ShipmentAlertSnapshot } from "@/lib/action-
 import type { Prisma } from "@prisma/client";
 import { ActivityAction, ActivityActorType, EntityType } from "@prisma/client";
 import { recordAuditEvent } from "@/lib/audit";
+import { appendFileSync } from "node:fs";
 
 type AlertSyncResult = {
   created: number;
@@ -11,6 +12,150 @@ type AlertSyncResult = {
   resolved: number;
   updated: number;
 };
+
+async function normalizeLegacyAlertSeverities(companyId: string) {
+  const legacyRows = await prisma.$queryRaw<Array<{ severity: string; count: number }>>`
+    SELECT "severity" AS severity, COUNT(*) AS count
+    FROM "Alert"
+    WHERE "companyId" = ${companyId}
+      AND "severity" IN ('HIGH', 'MEDIUM', 'LOW')
+    GROUP BY "severity"
+  `;
+  // #region agent log
+  appendFileSync(
+    "/opt/cursor/logs/debug.log",
+    JSON.stringify({
+      hypothesisId: "C",
+      location: "src/lib/alerts.ts:normalizeLegacyAlertSeverities:before_update",
+      message: "Checked legacy alert severities",
+      data: {
+        companyId,
+        legacyRows: legacyRows.map((row) => ({ severity: row.severity, count: Number(row.count) })),
+      },
+      timestamp: Date.now(),
+    }) + "\n",
+  );
+  // #endregion
+  if (legacyRows.length === 0) return;
+
+  await prisma.$executeRaw`
+    UPDATE "Alert"
+    SET "severity" = CASE
+      WHEN "severity" = 'HIGH' THEN 'CRITICAL'
+      WHEN "severity" = 'MEDIUM' THEN 'WARNING'
+      WHEN "severity" = 'LOW' THEN 'INFO'
+      ELSE "severity"
+    END
+    WHERE "companyId" = ${companyId}
+      AND "severity" IN ('HIGH', 'MEDIUM', 'LOW')
+  `;
+
+  const remainingLegacyRows = await prisma.$queryRaw<Array<{ severity: string; count: number }>>`
+    SELECT "severity" AS severity, COUNT(*) AS count
+    FROM "Alert"
+    WHERE "companyId" = ${companyId}
+      AND "severity" IN ('HIGH', 'MEDIUM', 'LOW')
+    GROUP BY "severity"
+  `;
+  // #region agent log
+  appendFileSync(
+    "/opt/cursor/logs/debug.log",
+    JSON.stringify({
+      hypothesisId: "C",
+      location: "src/lib/alerts.ts:normalizeLegacyAlertSeverities:after_update",
+      message: "Normalized legacy alert severities",
+      data: {
+        companyId,
+        remainingLegacyRows: remainingLegacyRows.map((row) => ({
+          severity: row.severity,
+          count: Number(row.count),
+        })),
+      },
+      timestamp: Date.now(),
+    }) + "\n",
+  );
+  // #endregion
+}
+
+async function normalizeLegacyAlertTypes(companyId: string) {
+  const legacyRows = await prisma.$queryRaw<Array<{ type: string; count: number }>>`
+    SELECT "type" AS type, COUNT(*) AS count
+    FROM "Alert"
+    WHERE "companyId" = ${companyId}
+      AND "type" IN (
+        'MISSING_INVOICE',
+        'MARGIN_NEGATIVE',
+        'MARGIN_DROP',
+        'PAYABLE_OVERDUE'
+      )
+    GROUP BY "type"
+  `;
+  // #region agent log
+  appendFileSync(
+    "/opt/cursor/logs/debug.log",
+    JSON.stringify({
+      hypothesisId: "D",
+      location: "src/lib/alerts.ts:normalizeLegacyAlertTypes:before_update",
+      message: "Checked legacy alert types",
+      data: {
+        companyId,
+        legacyRows: legacyRows.map((row) => ({ type: row.type, count: Number(row.count) })),
+      },
+      timestamp: Date.now(),
+    }) + "\n",
+  );
+  // #endregion
+  if (legacyRows.length === 0) return;
+
+  await prisma.$executeRaw`
+    UPDATE "Alert"
+    SET "type" = CASE
+      WHEN "type" = 'MISSING_INVOICE' THEN 'MISSING_INVOICE_AFTER_DEPARTURE'
+      WHEN "type" = 'MARGIN_NEGATIVE' THEN 'NEGATIVE_MARGIN'
+      WHEN "type" = 'MARGIN_DROP' THEN 'LOW_MARGIN_VS_QUOTE'
+      WHEN "type" = 'PAYABLE_OVERDUE' THEN 'OVERDUE_PAYABLE'
+      ELSE "type"
+    END
+    WHERE "companyId" = ${companyId}
+      AND "type" IN (
+        'MISSING_INVOICE',
+        'MARGIN_NEGATIVE',
+        'MARGIN_DROP',
+        'PAYABLE_OVERDUE'
+      )
+  `;
+
+  const remainingLegacyRows = await prisma.$queryRaw<Array<{ type: string; count: number }>>`
+    SELECT "type" AS type, COUNT(*) AS count
+    FROM "Alert"
+    WHERE "companyId" = ${companyId}
+      AND "type" IN (
+        'MISSING_INVOICE',
+        'MARGIN_NEGATIVE',
+        'MARGIN_DROP',
+        'PAYABLE_OVERDUE'
+      )
+    GROUP BY "type"
+  `;
+  // #region agent log
+  appendFileSync(
+    "/opt/cursor/logs/debug.log",
+    JSON.stringify({
+      hypothesisId: "D",
+      location: "src/lib/alerts.ts:normalizeLegacyAlertTypes:after_update",
+      message: "Normalized legacy alert types",
+      data: {
+        companyId,
+        remainingLegacyRows: remainingLegacyRows.map((row) => ({
+          type: row.type,
+          count: Number(row.count),
+        })),
+      },
+      timestamp: Date.now(),
+    }) + "\n",
+  );
+  // #endregion
+}
 
 export type AlertFeedRow = {
   id: string;
@@ -145,6 +290,8 @@ async function syncAlertsForSnapshots(input: {
   snapshots: ShipmentAlertSnapshot[];
   now: Date;
 }): Promise<AlertSyncResult> {
+  await normalizeLegacyAlertSeverities(input.companyId);
+  await normalizeLegacyAlertTypes(input.companyId);
   if (input.snapshots.length === 0) {
     return { created: 0, reopened: 0, resolved: 0, updated: 0 };
   }
@@ -363,47 +510,104 @@ export async function listAlertsForCompany(
   scope: { companyId: string },
   filters: AlertListFilters = {},
 ): Promise<AlertFeedRow[]> {
+  await normalizeLegacyAlertSeverities(scope.companyId);
+  await normalizeLegacyAlertTypes(scope.companyId);
   const query = filters.scope?.trim();
-  const rows = await prisma.alert.findMany({
-    where: {
-      companyId: scope.companyId,
-      ...(filters.type ? { type: filters.type } : {}),
-      ...(filters.severity ? { severity: filters.severity } : {}),
-      ...(filters.status
-        ? filters.status === "ACTIVE"
-          ? { status: { in: [AlertStatus.OPEN, AlertStatus.REOPENED] } }
-          : { status: filters.status }
-        : {}),
-      ...(filters.shipmentId ? { shipmentId: filters.shipmentId } : {}),
-      ...(filters.customerId ? { customerId: filters.customerId } : {}),
-      ...(query
-        ? {
-            OR: [
-              { title: { contains: query } },
-              { description: { contains: query } },
-              { shipment: { shipmentNumber: { contains: query } } },
-              { customer: { legalName: { contains: query } } },
-            ],
-          }
-        : {}),
-    },
-    include: {
-      shipment: {
-        select: {
-          id: true,
-          shipmentNumber: true,
+  const where: Prisma.AlertWhereInput = {
+    companyId: scope.companyId,
+    ...(filters.type ? { type: filters.type } : {}),
+    ...(filters.severity ? { severity: filters.severity } : {}),
+    ...(filters.status
+      ? filters.status === "ACTIVE"
+        ? { status: { in: [AlertStatus.OPEN, AlertStatus.REOPENED] } }
+        : { status: filters.status }
+      : {}),
+    ...(filters.shipmentId ? { shipmentId: filters.shipmentId } : {}),
+    ...(filters.customerId ? { customerId: filters.customerId } : {}),
+    ...(query
+      ? {
+          OR: [
+            { title: { contains: query } },
+            { description: { contains: query } },
+            { shipment: { shipmentNumber: { contains: query } } },
+            { customer: { legalName: { contains: query } } },
+          ],
+        }
+      : {}),
+  };
+  const orderBy: Prisma.AlertOrderByWithRelationInput[] = [{ createdAt: "desc" }];
+  const take = Math.max(1, Math.min(filters.limit ?? 80, 250));
+  // #region agent log
+  appendFileSync(
+    "/opt/cursor/logs/debug.log",
+    JSON.stringify({
+      hypothesisId: "A",
+      location: "src/lib/alerts.ts:listAlertsForCompany:before_query",
+      message: "Prepared alerts query inputs",
+      data: {
+        companyId: scope.companyId,
+        statusFilter: filters.status ?? null,
+        typeFilter: filters.type ?? null,
+        severityFilter: filters.severity ?? null,
+        hasScopeQuery: Boolean(query),
+        orderByKeys: Object.keys(orderBy[0] ?? {}),
+        take,
+      },
+      timestamp: Date.now(),
+    }) + "\n",
+  );
+  // #endregion
+  let rows;
+  try {
+    rows = await prisma.alert.findMany({
+      where,
+      include: {
+        shipment: {
+          select: {
+            id: true,
+            shipmentNumber: true,
+          },
+        },
+        customer: {
+          select: {
+            id: true,
+            legalName: true,
+          },
         },
       },
-      customer: {
-        select: {
-          id: true,
-          legalName: true,
+      orderBy,
+      take,
+    });
+  } catch (error) {
+    // #region agent log
+    appendFileSync(
+      "/opt/cursor/logs/debug.log",
+      JSON.stringify({
+        hypothesisId: "A",
+        location: "src/lib/alerts.ts:listAlertsForCompany:query_error",
+        message: "Alerts query failed",
+        data: {
+          companyId: scope.companyId,
+          errorMessage: error instanceof Error ? error.message : String(error),
         },
-      },
-    },
-    orderBy: [{ createdAt: "desc" }],
-    take: Math.max(1, Math.min(filters.limit ?? 80, 250)),
-  });
+        timestamp: Date.now(),
+      }) + "\n",
+    );
+    // #endregion
+    throw error;
+  }
+  // #region agent log
+  appendFileSync(
+    "/opt/cursor/logs/debug.log",
+    JSON.stringify({
+      hypothesisId: "A",
+      location: "src/lib/alerts.ts:listAlertsForCompany:after_query",
+      message: "Alerts query succeeded",
+      data: { rowCount: rows.length },
+      timestamp: Date.now(),
+    }) + "\n",
+  );
+  // #endregion
 
   const severityRank: Record<AlertSeverity, number> = {
     [AlertSeverity.CRITICAL]: 0,
