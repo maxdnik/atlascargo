@@ -2,16 +2,37 @@ import Link from "next/link";
 import {
   ArrowRight,
   CheckCircle2,
+  CircleCheck,
   CircleDollarSign,
   PackagePlus,
   Plus,
+  Siren,
   UserPlus,
 } from "lucide-react";
-import { PermissionAction, PermissionResource } from "@prisma/client";
+import {
+  AlertSeverity,
+  AlertStatus,
+  AlertType,
+  PermissionAction,
+  PermissionResource,
+} from "@prisma/client";
 import { enforcePagePermission } from "@/lib/permissions";
-import { getActionCenterData } from "@/lib/action-center";
+import { getActionCenterData, type ActionCenterFilters } from "@/lib/action-center";
+import { resolveActionCenterAlertAction } from "@/app/(dashboard)/dashboard/action-center/actions";
+import { getStatusLabel } from "@/lib/shipment-state";
 
-type Severity = "HIGH" | "MEDIUM" | "LOW";
+type ActionCenterPageProps = {
+  searchParams: Promise<{
+    severity?: string;
+    type?: string;
+    status?: string;
+    scope?: string;
+    shipmentId?: string;
+    customerId?: string;
+  }>;
+};
+
+type Severity = AlertSeverity;
 
 function formatMoney(value: number) {
   return new Intl.NumberFormat("en-US", {
@@ -22,38 +43,68 @@ function formatMoney(value: number) {
 }
 
 function statusClass(severity: Severity) {
-  if (severity === "HIGH") return "border-rose-200 bg-rose-50 text-rose-800";
-  if (severity === "MEDIUM") return "border-amber-200 bg-amber-50 text-amber-800";
+  if (severity === AlertSeverity.CRITICAL) return "border-rose-200 bg-rose-50 text-rose-800";
+  if (severity === AlertSeverity.WARNING) return "border-amber-200 bg-amber-50 text-amber-800";
   return "border-slate-200 bg-slate-50 text-slate-700";
 }
 
 function badgeClass(severity: Severity) {
-  if (severity === "HIGH") return "bg-rose-100 text-rose-700";
-  if (severity === "MEDIUM") return "bg-amber-100 text-amber-800";
+  if (severity === AlertSeverity.CRITICAL) return "bg-rose-100 text-rose-700";
+  if (severity === AlertSeverity.WARNING) return "bg-amber-100 text-amber-800";
   return "bg-slate-100 text-slate-700";
 }
 
-function rowSeverity(issue: string): Severity {
-  const normalized = issue.toLowerCase();
-  if (
-    normalized.includes("overdue") ||
-    normalized.includes("delayed") ||
-    normalized.includes("missing")
-  ) {
-    return "HIGH";
+function parseFilters(input: {
+  severity?: string;
+  type?: string;
+  status?: string;
+  scope?: string;
+  shipmentId?: string;
+  customerId?: string;
+}): ActionCenterFilters {
+  const filters: ActionCenterFilters = {};
+  if (input.severity && Object.values(AlertSeverity).includes(input.severity as AlertSeverity)) {
+    filters.severity = input.severity as AlertSeverity;
   }
-  return "MEDIUM";
+  if (input.type && Object.values(AlertType).includes(input.type as AlertType)) {
+    filters.type = input.type as AlertType;
+  }
+  if (input.status && (input.status === "ACTIVE" || Object.values(AlertStatus).includes(input.status as AlertStatus))) {
+    filters.status = input.status as ActionCenterFilters["status"];
+  }
+  if (input.scope) filters.scope = input.scope;
+  if (input.shipmentId) filters.shipmentId = input.shipmentId;
+  if (input.customerId) filters.customerId = input.customerId;
+  return filters;
 }
 
-export default async function ActionCenterPage() {
+function alertAgeLabel(createdAt: Date) {
+  const diffMs = Date.now() - createdAt.getTime();
+  const minutes = Math.floor(diffMs / 60_000);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.floor(hours / 24);
+  return `${days}d`;
+}
+
+function toStatusLabel(status: AlertStatus) {
+  if (status === AlertStatus.RESOLVED) return "Resolved";
+  if (status === AlertStatus.REOPENED) return "Reopened";
+  return "Open";
+}
+
+export default async function ActionCenterPage({ searchParams }: ActionCenterPageProps) {
   const session = await enforcePagePermission(PermissionResource.DASHBOARD, PermissionAction.VIEW);
-  const data = await getActionCenterData(session.companyId);
+  const rawFilters = await searchParams;
+  const filters = parseFilters(rawFilters);
+  const data = await getActionCenterData(session.companyId, filters);
 
   const criticalBlocks = [
     {
       key: "missing-docs",
-      title: "Missing documents",
-      description: "Shipments without booking/house/master references.",
+      title: "Missing BL/AWB",
+      description: "Shipments missing required BL/AWB reference or transport document.",
       items: data.criticalAlerts.missingDocuments,
     },
     {
@@ -70,8 +121,8 @@ export default async function ActionCenterPage() {
     },
     {
       key: "milestones",
-      title: "Missing milestones",
-      description: "IN_TRANSIT files without ATD/departure confirmation.",
+      title: "Missing / inconsistent milestones",
+      description: "Status progression inconsistent with milestone evidence.",
       items: data.criticalAlerts.missingMilestones,
     },
   ];
@@ -79,8 +130,8 @@ export default async function ActionCenterPage() {
   const financialBlocks = [
     {
       key: "no-invoice",
-      title: "No invoice on executed shipments",
-      description: "Shipment reached operational execution but has no invoice.",
+      title: "No invoice after departure",
+      description: "Shipment departed over 48h ago with no invoice.",
       items: data.financialRisks.noInvoice,
     },
     {
@@ -97,16 +148,26 @@ export default async function ActionCenterPage() {
     },
     {
       key: "overdue-invoices",
-      title: "Overdue invoices",
-      description: "Due date passed and invoice not paid.",
+      title: "Overdue receivables",
+      description: "Due date passed and receivable not paid.",
       items: data.financialRisks.overdueInvoices,
+    },
+    {
+      key: "overdue-payables",
+      title: "Overdue payables",
+      description: "Supplier obligations overdue and pending payment.",
+      items: data.financialRisks.overduePayables,
     },
   ];
 
   const totalCritical = criticalBlocks.reduce((sum, block) => sum + block.items.length, 0);
   const totalOperational =
-    data.operationalRisks.HIGH.length + data.operationalRisks.MEDIUM.length + data.operationalRisks.LOW.length;
+    data.operationalRisks[AlertSeverity.CRITICAL].length +
+    data.operationalRisks[AlertSeverity.WARNING].length +
+    data.operationalRisks[AlertSeverity.INFO].length;
   const totalFinancial = financialBlocks.reduce((sum, block) => sum + block.items.length, 0);
+
+  const selectableTypes = Object.values(AlertType);
 
   return (
     <div className="space-y-6">
@@ -114,7 +175,7 @@ export default async function ActionCenterPage() {
         <div>
           <h1 className="text-3xl font-semibold text-slate-950">Action Center</h1>
           <p className="mt-1 text-sm text-slate-500">
-            Decision hub for operational incidents, financial leakage, and required execution.
+            Rule-driven control hub for operational and financial alerts.
           </p>
         </div>
         <div className="grid w-full gap-3 sm:grid-cols-3 xl:max-w-[560px]">
@@ -132,6 +193,82 @@ export default async function ActionCenterPage() {
           </article>
         </div>
       </div>
+
+      <form className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm">
+        <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+          <select
+            name="severity"
+            defaultValue={data.filters.severity ?? ""}
+            className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-sky-300 focus:bg-white"
+          >
+            <option value="">All severities</option>
+            {Object.values(AlertSeverity).map((severity) => (
+              <option key={severity} value={severity}>
+                {severity}
+              </option>
+            ))}
+          </select>
+          <select
+            name="type"
+            defaultValue={data.filters.type ?? ""}
+            className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-sky-300 focus:bg-white"
+          >
+            <option value="">All types</option>
+            {selectableTypes.map((type) => (
+              <option key={type} value={type}>
+                {type}
+              </option>
+            ))}
+          </select>
+          <select
+            name="status"
+            defaultValue={data.filters.status ?? "ACTIVE"}
+            className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-sky-300 focus:bg-white"
+          >
+            <option value="ACTIVE">Active (Open + Reopened)</option>
+            <option value="OPEN">Open</option>
+            <option value="REOPENED">Reopened</option>
+            <option value="RESOLVED">Resolved</option>
+          </select>
+          <select
+            name="scope"
+            defaultValue={data.filters.scope ?? ""}
+            className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-sky-300 focus:bg-white"
+          >
+            <option value="">All scopes</option>
+            <option value="SHIPMENT">Shipment alerts</option>
+            <option value="COMPANY">Company-level alerts</option>
+          </select>
+          <input
+            type="text"
+            name="shipmentId"
+            defaultValue={data.filters.shipmentId ?? ""}
+            placeholder="Filter by shipment id"
+            className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-sky-300 focus:bg-white"
+          />
+          <input
+            type="text"
+            name="customerId"
+            defaultValue={data.filters.customerId ?? ""}
+            placeholder="Filter by customer id"
+            className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-sky-300 focus:bg-white"
+          />
+        </div>
+        <div className="mt-3 flex items-center gap-2">
+          <button
+            type="submit"
+            className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+          >
+            Apply filters
+          </button>
+          <Link
+            href="/dashboard/action-center"
+            className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+          >
+            Reset
+          </Link>
+        </div>
+      </form>
 
       <section className="grid gap-5 xl:grid-cols-12">
         <div className="space-y-5 xl:col-span-8">
@@ -182,12 +319,79 @@ export default async function ActionCenterPage() {
             </div>
           </article>
 
+          <article className="overflow-hidden rounded-2xl border border-indigo-200/80 bg-white shadow-sm">
+            <div className="flex items-center justify-between border-b border-indigo-100 bg-indigo-50/80 px-5 py-4">
+              <div>
+                <h2 className="text-sm font-semibold text-indigo-900">Normalized Alerts Feed</h2>
+                <p className="mt-0.5 text-xs text-indigo-700/80">
+                  Rules-engine output for UI and future notification channels.
+                </p>
+              </div>
+              <span className="inline-flex items-center gap-1 rounded-full bg-indigo-100 px-2.5 py-1 text-xs font-semibold text-indigo-700">
+                <Siren className="h-3.5 w-3.5" />
+                {data.alerts.length}
+              </span>
+            </div>
+            <div className="space-y-2 p-4">
+              {data.alerts.length === 0 ? (
+                <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
+                  No alerts for current filters.
+                </p>
+              ) : (
+                data.alerts.map((alert) => (
+                  <div key={alert.id} className={`rounded-lg border px-3 py-2 text-xs ${statusClass(alert.severity)}`}>
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <p className="font-semibold text-slate-900">{alert.title}</p>
+                        <p className="mt-0.5 text-slate-700">{alert.description}</p>
+                        <p className="mt-0.5 text-[11px] text-slate-500">
+                          {alert.type} · {alert.shipmentNumber ? `${alert.shipmentNumber} · ` : ""}
+                          {alert.customerName ?? "N/A"} · Age {alertAgeLabel(alert.createdAt)} ·{" "}
+                          {toStatusLabel(alert.status)}
+                        </p>
+                        {alert.recommendedAction ? (
+                          <p className="mt-1 text-[11px] font-semibold text-slate-700">
+                            Recommended: {alert.recommendedAction}
+                          </p>
+                        ) : null}
+                      </div>
+                      <span className="rounded-full bg-white/80 px-2 py-0.5 text-[11px] font-semibold">
+                        {alert.severity}
+                      </span>
+                    </div>
+                    <div className="mt-2 flex items-center gap-3">
+                      <Link
+                        href={alert.ctaHref}
+                        className="inline-flex items-center gap-1 font-medium text-blue-700 hover:text-blue-800"
+                      >
+                        Open {alert.shipmentId ? "shipment" : "action center"}{" "}
+                        <ArrowRight className="h-3.5 w-3.5" />
+                      </Link>
+                      {alert.status !== AlertStatus.RESOLVED ? (
+                        <form action={resolveActionCenterAlertAction}>
+                          <input type="hidden" name="alertId" value={alert.id} />
+                          <button
+                            type="submit"
+                            className="inline-flex items-center gap-1 font-medium text-emerald-700 hover:text-emerald-800"
+                          >
+                            <CircleCheck className="h-3.5 w-3.5" />
+                            Mark resolved
+                          </button>
+                        </form>
+                      ) : null}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </article>
+
           <article className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-sm">
             <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
               <div>
                 <h2 className="text-sm font-semibold text-slate-900">Operational Risks</h2>
                 <p className="mt-0.5 text-xs text-slate-500">
-                  Routing, scheduling, carrier, and customs execution exposures.
+                  Routing, scheduling, carrier, customs, and stage consistency exposures.
                 </p>
               </div>
               <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
@@ -195,7 +399,7 @@ export default async function ActionCenterPage() {
               </span>
             </div>
             <div className="grid gap-4 p-4 md:grid-cols-3">
-              {(Object.keys(data.operationalRisks) as Severity[]).map((severity) => {
+              {(Object.values(AlertSeverity) as Severity[]).map((severity) => {
                 const rows = data.operationalRisks[severity];
                 return (
                   <section key={severity} className="rounded-xl border border-slate-200 bg-white p-3">
@@ -212,7 +416,7 @@ export default async function ActionCenterPage() {
                         </p>
                       ) : (
                         rows.map((row) => (
-                          <div key={row.id} className={`rounded-lg border px-2.5 py-2 text-xs ${statusClass(severity)}`}>
+                          <div key={row.id} className={`rounded-lg border px-2.5 py-2 text-xs ${statusClass(row.severity)}`}>
                             <p className="font-semibold text-slate-900">
                               {row.shipmentNumber} · {row.customer}
                             </p>
@@ -238,7 +442,7 @@ export default async function ActionCenterPage() {
               <div>
                 <h2 className="text-sm font-semibold text-slate-900">Financial Risks</h2>
                 <p className="mt-0.5 text-xs text-slate-500">
-                  Revenue leakage, overdue receivables, and margin deterioration.
+                  Revenue leakage, overdue receivables/payables, and margin deterioration.
                 </p>
               </div>
               <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
@@ -261,26 +465,21 @@ export default async function ActionCenterPage() {
                         No active risk.
                       </p>
                     ) : (
-                      block.items.map((item) => {
-                        const severity = rowSeverity(item.issue);
-                        return (
-                          <div key={item.id} className={`rounded-lg border px-2.5 py-2 text-xs ${statusClass(severity)}`}>
-                            <p className="font-semibold text-slate-900">
-                              {item.shipmentNumber} · {item.customer}
-                            </p>
-                            <p className="mt-0.5">{item.issue}</p>
-                            <p className="mt-0.5 font-semibold">
-                              Impact: {formatMoney(item.amountImpact)}
-                            </p>
-                            <Link
-                              href={item.ctaHref}
-                              className="mt-1 inline-flex items-center gap-1 font-medium text-blue-700 hover:text-blue-800"
-                            >
-                              {item.ctaLabel} <ArrowRight className="h-3.5 w-3.5" />
-                            </Link>
-                          </div>
-                        );
-                      })
+                      block.items.map((item) => (
+                        <div key={item.id} className={`rounded-lg border px-2.5 py-2 text-xs ${statusClass(item.severity)}`}>
+                          <p className="font-semibold text-slate-900">
+                            {item.shipmentNumber} · {item.customer}
+                          </p>
+                          <p className="mt-0.5">{item.issue}</p>
+                          <p className="mt-0.5 font-semibold">Impact: {formatMoney(item.amountImpact)}</p>
+                          <Link
+                            href={item.ctaHref}
+                            className="mt-1 inline-flex items-center gap-1 font-medium text-blue-700 hover:text-blue-800"
+                          >
+                            {item.ctaLabel} <ArrowRight className="h-3.5 w-3.5" />
+                          </Link>
+                        </div>
+                      ))
                     )}
                   </div>
                 </section>
@@ -293,7 +492,7 @@ export default async function ActionCenterPage() {
               <div>
                 <h2 className="text-sm font-semibold text-slate-900">Tasks / Required Actions</h2>
                 <p className="mt-0.5 text-xs text-slate-500">
-                  Auto-generated next actions from operational and financial exceptions.
+                  Auto-generated next actions from normalized exception rules.
                 </p>
               </div>
               <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
@@ -403,7 +602,7 @@ export default async function ActionCenterPage() {
                     <p className="text-xs font-semibold text-slate-900">{item.shipmentNumber}</p>
                     <p className="text-xs text-slate-600">{item.customer}</p>
                     <p className="text-[11px] text-slate-500">
-                      {item.status} · {item.updatedAt.toLocaleString()}
+                      {getStatusLabel(item.status)} · {item.updatedAt.toLocaleString()}
                     </p>
                   </Link>
                 ))

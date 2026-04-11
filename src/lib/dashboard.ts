@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { MilestoneStatus, QuoteStatus, ShipmentStatus } from "@prisma/client";
+import { listOpenAlertsForCompany } from "@/lib/alerts";
 
 const DEFAULT_COMPANY_ID = "comp_atlascargo";
 
@@ -50,7 +51,7 @@ export async function getDashboardKpis(companyId = DEFAULT_COMPANY_ID) {
     .flatMap((shipment) => shipment.expenses)
     .reduce((acc, row) => acc + Number(row.amountBase ?? 0), 0);
 
-  const [shipments, delayedMilestoneEntries, pendingDocuments, pendingFinancialRecords] = await Promise.all([
+  const [shipments, delayedMilestoneEntries, pendingDocuments, pendingFinancialRecords, openAlerts] = await Promise.all([
     prisma.shipment.findMany({
       where: { companyId },
       select: {
@@ -135,6 +136,7 @@ export async function getDashboardKpis(companyId = DEFAULT_COMPANY_ID) {
       orderBy: [{ updatedAt: "desc" }],
       take: 5,
     }),
+    listOpenAlertsForCompany(companyId, 8),
   ]);
 
   const inTransit = shipments.filter((shipment) => shipment.status === ShipmentStatus.IN_TRANSIT).length;
@@ -191,27 +193,41 @@ export async function getDashboardKpis(companyId = DEFAULT_COMPANY_ID) {
     },
   ];
 
-  const alerts = [
+  const fallbackAlerts = [
     ...delayedMilestoneEntries.map((entry, index) => ({
       id: `delayed-${index}-${entry.shipment.shipmentNumber}`,
       title: `Delayed shipment · ${entry.shipment.shipmentNumber}`,
       level: "critical" as const,
       timestamp: entry.updatedAt.toLocaleString(),
+      createdAt: entry.updatedAt,
     })),
     ...pendingDocuments.map((entry, index) => ({
       id: `docs-${index}-${entry.shipment.shipmentNumber}`,
       title: `Missing documents · ${entry.shipment.shipmentNumber}`,
       level: "warning" as const,
       timestamp: entry.updatedAt.toLocaleString(),
+      createdAt: entry.updatedAt,
     })),
     ...pendingFinancialRecords.map((entry, index) => ({
       id: `finance-${index}-${entry.shipment.shipmentNumber}`,
       title: `Pending actions · ${entry.shipment.shipmentNumber}`,
       level: "warning" as const,
       timestamp: entry.updatedAt.toLocaleString(),
+      createdAt: entry.updatedAt,
     })),
-  ]
-    .sort((a, b) => (a.timestamp < b.timestamp ? 1 : -1))
+  ];
+  const alerts = (
+    openAlerts.length > 0
+      ? openAlerts.map((alert) => ({
+          id: alert.id,
+          title: alert.title,
+          level: alert.severity === "CRITICAL" ? ("critical" as const) : ("warning" as const),
+          timestamp: alert.createdAt.toLocaleString(),
+          createdAt: alert.createdAt,
+        }))
+      : fallbackAlerts
+  )
+    .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
     .slice(0, 8);
 
   const activityRows = shipments.slice(0, 12).map((shipment) => ({

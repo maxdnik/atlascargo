@@ -10,6 +10,7 @@ import {
 import { z } from "zod";
 import { enforceActionPermission } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
+import { runAlertChecksForInvoiceMutation } from "@/lib/alerts";
 import {
   addInvoiceLine,
   cancelInvoice,
@@ -142,6 +143,12 @@ export async function createFinanceInvoiceAction(
     revalidatePath("/finance/invoices");
     revalidatePath(`/finance/invoices/${created.id}`);
     revalidatePath("/finance/ar");
+    await runAlertChecksForInvoiceMutation({
+      companyId: ctx.companyId,
+      shipmentId: parsedHeader.shipmentId,
+    });
+    revalidatePath("/dashboard");
+    revalidatePath("/dashboard/action-center");
     return { success: true };
   } catch (error) {
     return {
@@ -257,6 +264,12 @@ export async function updateFinanceInvoiceAction(
     revalidatePath(`/finance/invoices/${invoiceId}`);
     revalidatePath(`/finance/invoices/${invoiceId}/edit`);
     revalidatePath("/finance/ar");
+    await runAlertChecksForInvoiceMutation({
+      companyId: ctx.companyId,
+      shipmentId: parsedHeader.shipmentId,
+    });
+    revalidatePath("/dashboard");
+    revalidatePath("/dashboard/action-center");
     return { success: true };
   } catch (error) {
     return {
@@ -314,6 +327,12 @@ async function mutateInvoiceStatus(
     revalidatePath(`/finance/invoices/${updated.id}`);
     revalidatePath("/finance/ar");
     revalidatePath(`/shipments/${updated.shipmentId}`);
+    await runAlertChecksForInvoiceMutation({
+      companyId: ctx.companyId,
+      shipmentId: updated.shipmentId,
+    });
+    revalidatePath("/dashboard");
+    revalidatePath("/dashboard/action-center");
     return { success: true };
   } catch (error) {
     return {
