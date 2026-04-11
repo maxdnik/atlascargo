@@ -10,6 +10,7 @@ import {
   FinancialRecordStatus,
   EntityType,
   MilestoneStatus,
+  PaymentEntityType,
   Prisma,
   QuoteStatus,
   ShipmentCostCategory,
@@ -33,9 +34,9 @@ import {
   createInvoiceForShipment,
   deleteInvoice,
   issueInvoiceWithAfip,
-  markInvoicePaid,
   updateInvoiceHeader,
 } from "@/lib/invoices";
+import { registerEntityPayment } from "@/lib/payments";
 
 const TRANSPORT_MODES = ["AIR", "OCEAN", "ROAD", "COURIER"] as const;
 const TRADE_DIRECTIONS = ["IMPORT", "EXPORT"] as const;
@@ -2141,15 +2142,32 @@ export async function markInvoicePaidAction(
   _prevState: ShipmentActionState,
   formData: FormData,
 ): Promise<ShipmentActionState> {
+  return registerShipmentInvoicePaymentAction(_prevState, formData);
+}
+
+function defaultPaymentDate() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+export async function registerShipmentInvoicePaymentAction(
+  _prevState: ShipmentActionState,
+  formData: FormData,
+): Promise<ShipmentActionState> {
   try {
     const ctx = await getContext("SHIPMENTS", "EDIT");
     await enforceActionPermission("REVENUE", "EDIT");
-    const id = String(formData.get("id") ?? "").trim();
+    const id = String(formData.get("id") || formData.get("invoiceId") || "").trim();
     if (!id) {
       throw new Error("Invoice id is required");
     }
+    const amountRaw = formData.get("amount");
+    const parsedAmount = amountRaw ? Number(amountRaw) : undefined;
+    const paymentDate = String(formData.get("paymentDate") || defaultPaymentDate());
+    const method = formData.get("method") ? String(formData.get("method")) : undefined;
+    const reference = formData.get("reference") ? String(formData.get("reference")) : undefined;
+    const notes = formData.get("notes") ? String(formData.get("notes")) : undefined;
 
-    const before = await prisma.invoice.findFirst({
+    const invoice = await prisma.invoice.findFirst({
       where: {
         id,
         companyId: ctx.companyId,
@@ -2157,39 +2175,50 @@ export async function markInvoicePaidAction(
       select: {
         id: true,
         shipmentId: true,
-        customerId: true,
-        status: true,
-        invoiceNumber: true,
+        currencyCode: true,
+        total: true,
+        payments: {
+          select: {
+            amount: true,
+          },
+        },
       },
     });
-    if (!before) {
+    if (!invoice) {
       throw new Error("Invoice not found");
     }
-    const updated = await markInvoicePaid({
+    const totalAmount = Number(invoice.total);
+    const paidAmount = invoice.payments.reduce((sum, payment) => sum + Number(payment.amount), 0);
+    const outstandingAmount = Math.max(totalAmount - paidAmount, 0);
+    if (outstandingAmount <= 0) {
+      throw new Error("Invoice is already fully paid");
+    }
+    const amountToRegister = parsedAmount ?? outstandingAmount;
+
+    await registerEntityPayment({
       companyId: ctx.companyId,
-      invoiceId: id,
-    });
-    await recordAuditEvent({
-      companyId: ctx.companyId,
-      entityType: EntityType.INVOICE,
-      entityId: updated.id,
-      action: ActivityAction.MARK_PAID,
-      shipmentId: updated.shipmentId,
-      customerId: updated.customerId,
-      field: "status",
-      oldValue: before.status,
-      newValue: updated.status,
-      summary: `Invoice ${updated.invoiceNumber} marked as paid.`,
-      actor: getAuditActor(ctx),
+      branchId: ctx.branchId ?? null,
+      entityType: PaymentEntityType.INVOICE,
+      entityId: invoice.id,
+      amount: amountToRegister,
+      currencyCode: invoice.currencyCode,
+      paymentDate,
+      method,
+      reference,
+      notes,
+      actor: {
+        actorId: ctx.userId,
+      },
     });
 
-    revalidatePath(`/shipments/${updated.shipmentId}`);
-    revalidatePath(`/finance/invoices/${updated.id}`);
+    revalidatePath(`/shipments/${invoice.shipmentId}`);
+    revalidatePath(`/finance/invoices/${invoice.id}`);
     revalidatePath("/finance/invoices");
     revalidatePath("/finance/ar");
+    revalidatePath("/finance/forecast");
     await runAlertChecksForInvoiceMutation({
       companyId: ctx.companyId,
-      shipmentId: updated.shipmentId,
+      shipmentId: invoice.shipmentId,
     });
     return { success: true };
   } catch (error) {
@@ -2199,9 +2228,13 @@ export async function markInvoicePaidAction(
 }
 
 export async function markInvoicePaidDirectAction(formData: FormData): Promise<void> {
-  const result = await markInvoicePaidAction({ success: false }, formData);
+  return registerShipmentInvoicePaymentDirectAction(formData);
+}
+
+export async function registerShipmentInvoicePaymentDirectAction(formData: FormData): Promise<void> {
+  const result = await registerShipmentInvoicePaymentAction({ success: false }, formData);
   if (!result.success) {
-    throw new Error(result.error ?? "Unable to mark invoice paid");
+    throw new Error(result.error ?? "Unable to register invoice payment");
   }
 }
 

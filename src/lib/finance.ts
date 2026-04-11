@@ -1,4 +1,5 @@
 import {
+  PaymentEntityType,
   GeneralExpenseCategory,
   GeneralExpenseStatus,
   FinancialRecordStatus,
@@ -41,6 +42,10 @@ export type FinanceOverview = {
   netCashFlow: number;
   accountsReceivable: number;
   accountsPayable: number;
+  overdueReceivables: number;
+  overduePayables: number;
+  arAging: AgingBreakdown;
+  apAging: AgingBreakdown;
 };
 
 export type FinanceAlert = {
@@ -68,11 +73,16 @@ export type AccountsReceivableRow = {
   customer: string;
   shipment: string;
   invoice: string;
-  amount: number;
+  currencyCode: string;
+  totalAmount: number;
+  paidAmount: number;
+  outstandingAmount: number;
+  paymentStatus: "UNPAID" | "PARTIALLY_PAID" | "PAID";
   dueDate: Date | null;
-  daysOverdue: number;
-  status: "PAID" | "OVERDUE" | "CANCELLED" | InvoiceStatus;
-  outstanding: number;
+  overdueDays: number;
+  overdueFlag: boolean;
+  agingBucket: AgingBucket;
+  invoiceStatus: InvoiceStatus;
   afipStatus: string | null;
   afipCAE: string | null;
   afipNumber: string | null;
@@ -80,20 +90,25 @@ export type AccountsReceivableRow = {
 
 export type AccountsPayableRow = {
   id: string;
+  entityType: PaymentEntityType;
+  entityId: string;
   vendor: string;
   shipment: string;
   reference: string;
-  amount: number;
+  currencyCode: string;
+  totalAmount: number;
+  paidAmount: number;
+  outstandingAmount: number;
+  paymentStatus: "UNPAID" | "PARTIALLY_PAID" | "PAID";
   dueDate: Date | null;
-  status:
-    | "PAID"
-    | "OVERDUE"
-    | "CANCELLED"
+  overdueDays: number;
+  overdueFlag: boolean;
+  agingBucket: AgingBucket;
+  sourceStatus:
     | InvoiceStatus
     | FinancialRecordStatus
     | ShipmentCostStatus
     | GeneralExpenseStatus;
-  outstanding: number;
 };
 
 export type ForecastDayRow = {
@@ -115,6 +130,15 @@ export type FinanceModuleData = {
   accountsPayable: AccountsPayableRow[];
   arCustomers: Array<{ id: string; name: string }>;
 };
+
+export type AgingBucket =
+  | "CURRENT"
+  | "OVERDUE_0_30"
+  | "OVERDUE_31_60"
+  | "OVERDUE_61_90"
+  | "OVERDUE_90_PLUS";
+
+export type AgingBreakdown = Record<AgingBucket, number>;
 
 export type GeneralExpenseRow = {
   id: string;
@@ -148,11 +172,6 @@ export type InvoiceArListRow = {
   afipNumber: string | null;
 };
 
-const COMPLETE_INVOICE_STATUSES = new Set<string>([
-  "PAID",
-  "CANCELLED",
-]);
-
 function asNumber(value: unknown) {
   if (value === null || value === undefined) return 0;
   return Number(value);
@@ -178,19 +197,41 @@ function parseDateKey(value: string) {
   return new Date(`${value}T00:00:00.000Z`);
 }
 
-function latestDate(dates: Date[]) {
-  if (dates.length === 0) return null;
-  return dates.reduce((latest, current) => (current > latest ? current : latest));
-}
-
 function getOutstanding(total: number, paid: number) {
   return Math.max(total - paid, 0);
+}
+
+function getPaymentStatus(total: number, paid: number): "UNPAID" | "PARTIALLY_PAID" | "PAID" {
+  if (total <= 0) return "PAID";
+  if (paid <= 0) return "UNPAID";
+  if (paid + 0.000001 >= total) return "PAID";
+  return "PARTIALLY_PAID";
 }
 
 function getDaysOverdue(dueDate: Date | null, today: Date, outstanding: number) {
   if (!dueDate || outstanding <= 0) return 0;
   const diffMs = dayStart(today).getTime() - dayStart(dueDate).getTime();
   return diffMs > 0 ? Math.floor(diffMs / 86_400_000) : 0;
+}
+
+function getAgingBucket(dueDate: Date | null, today: Date, outstanding: number): AgingBucket {
+  if (outstanding <= 0 || !dueDate) return "CURRENT";
+  const daysOverdue = getDaysOverdue(dueDate, today, outstanding);
+  if (daysOverdue <= 0) return "CURRENT";
+  if (daysOverdue <= 30) return "OVERDUE_0_30";
+  if (daysOverdue <= 60) return "OVERDUE_31_60";
+  if (daysOverdue <= 90) return "OVERDUE_61_90";
+  return "OVERDUE_90_PLUS";
+}
+
+function emptyAgingBreakdown(): AgingBreakdown {
+  return {
+    CURRENT: 0,
+    OVERDUE_0_30: 0,
+    OVERDUE_31_60: 0,
+    OVERDUE_61_90: 0,
+    OVERDUE_90_PLUS: 0,
+  };
 }
 
 function toMapRow(
@@ -215,32 +256,6 @@ function toMapRow(
   };
   map.set(shipmentId, created);
   return created;
-}
-
-function invoiceStatusLabel(
-  status: InvoiceStatus,
-  dueDate: Date | null,
-  today: Date,
-  outstanding: number,
-): "PAID" | "OVERDUE" | "CANCELLED" | InvoiceStatus {
-  if (outstanding <= 0 || status === "PAID") return "PAID";
-  if (status === "CANCELLED") return "CANCELLED";
-  if (dueDate && dayStart(dueDate) < dayStart(today)) return "OVERDUE";
-  return status;
-}
-
-function payableStatusLabel(
-  status: ShipmentCostStatus | InvoiceStatus | GeneralExpenseStatus,
-  dueDate: Date | null,
-  today: Date,
-  outstanding: number,
-): "PAID" | "OVERDUE" | "CANCELLED" | InvoiceStatus | ShipmentCostStatus | GeneralExpenseStatus {
-  if (outstanding <= 0 || status === "PAID") {
-    return "PAID";
-  }
-  if (status === "CANCELLED") return "CANCELLED";
-  if (dueDate && dayStart(dueDate) < dayStart(today)) return "OVERDUE";
-  return status;
 }
 
 export async function getFinanceModuleData(companyId: string): Promise<FinanceModuleData> {
@@ -273,6 +288,12 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
         dueDate: true,
         status: true,
         createdAt: true,
+        payments: {
+          select: {
+            amount: true,
+            paymentDate: true,
+          },
+        },
         shipment: {
           select: {
             shipmentNumber: true,
@@ -295,6 +316,12 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
         notes: true,
         createdAt: true,
         updatedAt: true,
+        payments: {
+          select: {
+            amount: true,
+            paymentDate: true,
+          },
+        },
       },
     }),
     prisma.invoice.findMany({
@@ -313,6 +340,7 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
         dueDate: true,
         issueDate: true,
         total: true,
+        currencyCode: true,
         afipStatus: true,
         afipCAE: true,
         afipNumber: true,
@@ -337,6 +365,11 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
       },
       select: {
         amount: true,
+        paymentDate: true,
+        entityType: true,
+        invoiceId: true,
+        shipmentCostId: true,
+        generalExpenseId: true,
         revenueId: true,
         expenseId: true,
         invoice: { select: { customerId: true } },
@@ -416,10 +449,12 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
   const accountsReceivable = shipmentInvoices
     .filter((invoice) => invoice.customerId && invoice.customer)
     .map<AccountsReceivableRow>((invoice) => {
-      const amount = asNumber(invoice.total);
-      const paid = invoice.payments.reduce((sum, payment) => sum + asNumber(payment.amount), 0);
-      const outstanding = getOutstanding(amount, paid);
-      const daysOverdue = getDaysOverdue(invoice.dueDate, today, outstanding);
+      const totalAmount = asNumber(invoice.total);
+      const paidAmount = invoice.payments.reduce((sum, payment) => sum + asNumber(payment.amount), 0);
+      const outstandingAmount = getOutstanding(totalAmount, paidAmount);
+      const overdueDays = getDaysOverdue(invoice.dueDate, today, outstandingAmount);
+      const overdueFlag = overdueDays > 0;
+      const agingBucket = getAgingBucket(invoice.dueDate, today, outstandingAmount);
       return {
         id: invoice.id,
         invoiceId: invoice.id,
@@ -427,11 +462,16 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
         customer: invoice.customer!.legalName,
         shipment: invoice.shipment?.shipmentNumber ?? "-",
         invoice: invoice.invoiceNumber,
-        amount,
+        currencyCode: invoice.currencyCode,
+        totalAmount,
+        paidAmount,
+        outstandingAmount,
+        paymentStatus: getPaymentStatus(totalAmount, paidAmount),
         dueDate: invoice.dueDate,
-        daysOverdue,
-        status: invoiceStatusLabel(invoice.status, invoice.dueDate, today, outstanding),
-        outstanding,
+        overdueDays,
+        overdueFlag,
+        agingBucket,
+        invoiceStatus: invoice.status,
         afipStatus: invoice.afipStatus,
         afipCAE: invoice.afipCAE,
         afipNumber: invoice.afipNumber,
@@ -444,33 +484,61 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
     });
 
   const payablesFromShipmentCosts = shipmentCosts.map<AccountsPayableRow>((shipmentCost) => {
-    const amount = asNumber(shipmentCost.amount);
-    const outstanding = shipmentCost.status === ShipmentCostStatus.PAID ? 0 : amount;
+    const totalAmount = asNumber(shipmentCost.amount);
+    const paidAmount = shipmentCost.payments.reduce((sum, payment) => sum + asNumber(payment.amount), 0);
+    const outstandingAmount = getOutstanding(totalAmount, paidAmount);
+    const overdueDays = getDaysOverdue(shipmentCost.dueDate, today, outstandingAmount);
+    const overdueFlag = overdueDays > 0;
+    const agingBucket = getAgingBucket(shipmentCost.dueDate, today, outstandingAmount);
     const reference =
       shipmentCost.customConcept?.trim() ||
       shipmentCost.conceptCategory.replaceAll("_", " ");
     return {
       id: shipmentCost.id,
+      entityType: PaymentEntityType.SHIPMENT_COST,
+      entityId: shipmentCost.id,
       vendor: shipmentCost.supplierName,
       shipment: shipmentCost.shipment.shipmentNumber,
       reference,
-      amount,
+      currencyCode: shipmentCost.currencyCode,
+      totalAmount,
+      paidAmount,
+      outstandingAmount,
+      paymentStatus: getPaymentStatus(totalAmount, paidAmount),
       dueDate: shipmentCost.dueDate,
-      status: payableStatusLabel(shipmentCost.status, shipmentCost.dueDate, today, outstanding),
-      outstanding,
+      overdueDays,
+      overdueFlag,
+      agingBucket,
+      sourceStatus: shipmentCost.status,
     };
   });
 
-  const payablesFromGeneralExpenses = generalExpenses.map<AccountsPayableRow>((expense) => ({
-    id: expense.id,
-    vendor: "General Overhead",
-    shipment: "-",
-    reference: expense.customConcept?.trim() || expense.conceptCategory.replaceAll("_", " "),
-    amount: asNumber(expense.amount),
-    dueDate: expense.dueDate,
-    status: expense.status,
-    outstanding: expense.status === GeneralExpenseStatus.PAID ? 0 : asNumber(expense.amount),
-  }));
+  const payablesFromGeneralExpenses = generalExpenses.map<AccountsPayableRow>((expense) => {
+    const totalAmount = asNumber(expense.amount);
+    const paidAmount = expense.payments.reduce((sum, payment) => sum + asNumber(payment.amount), 0);
+    const outstandingAmount = getOutstanding(totalAmount, paidAmount);
+    const overdueDays = getDaysOverdue(expense.dueDate, today, outstandingAmount);
+    const overdueFlag = overdueDays > 0;
+    const agingBucket = getAgingBucket(expense.dueDate, today, outstandingAmount);
+    return {
+      id: expense.id,
+      entityType: PaymentEntityType.GENERAL_EXPENSE,
+      entityId: expense.id,
+      vendor: "General Overhead",
+      shipment: "-",
+      reference: expense.customConcept?.trim() || expense.conceptCategory.replaceAll("_", " "),
+      currencyCode: expense.currencyCode,
+      totalAmount,
+      paidAmount,
+      outstandingAmount,
+      paymentStatus: getPaymentStatus(totalAmount, paidAmount),
+      dueDate: expense.dueDate,
+      overdueDays,
+      overdueFlag,
+      agingBucket,
+      sourceStatus: expense.status,
+    };
+  });
 
   const accountsPayable = [...payablesFromShipmentCosts, ...payablesFromGeneralExpenses].sort((a, b) => {
     const aTime = a.dueDate ? a.dueDate.getTime() : Number.MAX_SAFE_INTEGER;
@@ -478,13 +546,44 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
     return aTime - bTime;
   });
 
-  const accountsReceivableTotal = accountsReceivable.reduce((sum, row) => sum + row.outstanding, 0);
-  const accountsPayableTotal = accountsPayable.reduce((sum, row) => sum + row.outstanding, 0);
+  const accountsReceivableTotal = accountsReceivable.reduce((sum, row) => sum + row.outstandingAmount, 0);
+  const accountsPayableTotal = accountsPayable.reduce((sum, row) => sum + row.outstandingAmount, 0);
+  const overdueReceivables = accountsReceivable
+    .filter((row) => row.overdueFlag)
+    .reduce((sum, row) => sum + row.outstandingAmount, 0);
+  const overduePayables = accountsPayable
+    .filter((row) => row.overdueFlag)
+    .reduce((sum, row) => sum + row.outstandingAmount, 0);
+
+  const arAging = emptyAgingBreakdown();
+  for (const row of accountsReceivable) {
+    arAging[row.agingBucket] += row.outstandingAmount;
+  }
+  const apAging = emptyAgingBreakdown();
+  for (const row of accountsPayable) {
+    apAging[row.agingBucket] += row.outstandingAmount;
+  }
 
   const currentMonthInflows = monthlyPayments
-    .filter((payment) => payment.revenueId || payment.invoice?.customerId)
+    .filter(
+      (payment) =>
+        payment.entityType === PaymentEntityType.INVOICE ||
+        Boolean(payment.invoiceId) ||
+        Boolean(payment.invoice?.customerId) ||
+        Boolean(payment.revenueId),
+    )
     .reduce((sum, payment) => sum + asNumber(payment.amount), 0);
-  const currentMonthOutflows = shipmentCostsCurrentMonth + generalOverheadCurrentMonth;
+  const currentMonthOutflows = monthlyPayments
+    .filter(
+      (payment) =>
+        payment.entityType === PaymentEntityType.SHIPMENT_COST ||
+        payment.entityType === PaymentEntityType.GENERAL_EXPENSE ||
+        payment.entityType === PaymentEntityType.EXPENSE ||
+        Boolean(payment.shipmentCostId) ||
+        Boolean(payment.generalExpenseId) ||
+        Boolean(payment.expenseId),
+    )
+    .reduce((sum, payment) => sum + asNumber(payment.amount), 0);
 
   const totalCostsCurrentMonth = shipmentCostsCurrentMonth + generalOverheadCurrentMonth;
   const overview: FinanceOverview = {
@@ -501,6 +600,10 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
     netCashFlow: currentMonthInflows - currentMonthOutflows,
     accountsReceivable: accountsReceivableTotal,
     accountsPayable: accountsPayableTotal,
+    overdueReceivables,
+    overduePayables,
+    arAging,
+    apAging,
   };
 
   const topShipmentsByMargin = shipmentProfitability
@@ -518,8 +621,8 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
     .slice(0, 4);
 
   const overdueInvoices = accountsReceivable
-    .filter((row) => row.daysOverdue > 0 && row.outstanding > 0)
-    .sort((a, b) => b.daysOverdue - a.daysOverdue)
+    .filter((row) => row.overdueDays > 0 && row.outstandingAmount > 0)
+    .sort((a, b) => b.overdueDays - a.overdueDays)
     .slice(0, 4);
 
   const negativeMargins = shipmentProfitability
@@ -535,8 +638,8 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
     })),
     ...overdueInvoices.map((row) => ({
       kind: "overdue-invoice" as const,
-      title: `${row.invoice} overdue (${row.daysOverdue}d)`,
-      detail: `${row.customer} · Outstanding ${row.outstanding.toFixed(2)} USD`,
+      title: `${row.invoice} overdue (${row.overdueDays}d)`,
+      detail: `${row.customer} · Outstanding ${row.outstandingAmount.toFixed(2)} ${row.currencyCode}`,
     })),
     ...negativeMargins.map((row) => ({
       kind: "negative-margin" as const,
@@ -548,80 +651,112 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
   const forecastTransactions: ForecastTransaction[] = [];
 
   for (const invoice of shipmentInvoices) {
-    if (COMPLETE_INVOICE_STATUSES.has(invoice.status) && invoice.payments.length === 0) {
-      continue;
-    }
-
-    const paid = invoice.payments.reduce((sum, payment) => sum + asNumber(payment.amount), 0);
-    const amount = asNumber(invoice.total);
-    const outstanding = getOutstanding(amount, paid);
-    const expectedDate = (invoice.dueDate ?? invoice.issueDate) as Date;
-    const actualDate = outstanding <= 0 ? latestDate(invoice.payments.map((p) => p.paymentDate)) : null;
-    const forecastDate = actualDate ?? expectedDate;
-
-    if (!forecastDate) continue;
     if (invoice.status === "CANCELLED") continue;
-
-    const movementAmount = outstanding > 0 ? outstanding : Math.max(paid, amount);
-    const isAR = Boolean(invoice.customerId && invoice.customer);
-
-    if (isAR) {
+    if (!invoice.customerId || !invoice.customer) continue;
+    const expectedDate = invoice.dueDate ?? invoice.issueDate ?? invoice.createdAt;
+    const paidAmount = invoice.payments.reduce((sum, payment) => sum + asNumber(payment.amount), 0);
+    const outstandingAmount = getOutstanding(asNumber(invoice.total), paidAmount);
+    for (const payment of invoice.payments) {
       forecastTransactions.push({
-        id: `arinv-${invoice.id}`,
+        id: `arinv-paid-${invoice.id}-${payment.paymentDate.toISOString()}`,
         type: "INFLOW",
         source: "AR_INVOICE",
-        date: forecastDate,
-        amount: movementAmount,
+        date: payment.paymentDate,
+        amount: asNumber(payment.amount),
         shipmentNumber: invoice.shipment?.shipmentNumber ?? "-",
-        party: invoice.customer!.legalName,
+        party: invoice.customer.legalName,
         reference: invoice.invoiceNumber,
         expectedDate,
-        actualDate,
+        actualDate: payment.paymentDate,
       });
     }
-
+    if (outstandingAmount > 0) {
+      forecastTransactions.push({
+        id: `arinv-open-${invoice.id}`,
+        type: "INFLOW",
+        source: "AR_INVOICE",
+        date: expectedDate,
+        amount: outstandingAmount,
+        shipmentNumber: invoice.shipment?.shipmentNumber ?? "-",
+        party: invoice.customer.legalName,
+        reference: invoice.invoiceNumber,
+        expectedDate,
+        actualDate: null,
+      });
+    }
   }
 
   for (const cost of shipmentCosts) {
-    if (cost.status === ShipmentCostStatus.PAID) {
-      continue;
-    }
-
     const amount = asNumber(cost.amount);
+    const paidAmount = cost.payments.reduce((sum, payment) => sum + asNumber(payment.amount), 0);
+    const outstandingAmount = getOutstanding(amount, paidAmount);
     const expectedDate = cost.dueDate ?? cost.createdAt;
-    const forecastDate = expectedDate;
-    if (!forecastDate) continue;
-
-    forecastTransactions.push({
-      id: `scost-${cost.id}`,
-      type: "OUTFLOW",
-      source: "AP_SHIPMENT_COST",
-      date: forecastDate,
-      amount,
-      shipmentNumber: cost.shipment.shipmentNumber,
-      party: cost.supplierName,
-      reference: cost.customConcept?.trim() || cost.conceptCategory.replaceAll("_", " "),
-      expectedDate,
-      actualDate: null,
-    });
+    for (const payment of cost.payments) {
+      forecastTransactions.push({
+        id: `scost-paid-${cost.id}-${payment.paymentDate.toISOString()}`,
+        type: "OUTFLOW",
+        source: "AP_SHIPMENT_COST",
+        date: payment.paymentDate,
+        amount: asNumber(payment.amount),
+        shipmentNumber: cost.shipment.shipmentNumber,
+        party: cost.supplierName,
+        reference: cost.customConcept?.trim() || cost.conceptCategory.replaceAll("_", " "),
+        expectedDate,
+        actualDate: payment.paymentDate,
+      });
+    }
+    if (outstandingAmount > 0) {
+      forecastTransactions.push({
+        id: `scost-open-${cost.id}`,
+        type: "OUTFLOW",
+        source: "AP_SHIPMENT_COST",
+        date: expectedDate,
+        amount: outstandingAmount,
+        shipmentNumber: cost.shipment.shipmentNumber,
+        party: cost.supplierName,
+        reference: cost.customConcept?.trim() || cost.conceptCategory.replaceAll("_", " "),
+        expectedDate,
+        actualDate: null,
+      });
+    }
   }
 
   for (const expense of generalExpenses) {
     if (expense.status === GeneralExpenseStatus.CANCELLED) {
       continue;
     }
-    forecastTransactions.push({
-      id: `gexp-${expense.id}`,
-      type: "OUTFLOW",
-      source: "GENERAL_OVERHEAD",
-      date: expense.dueDate ?? expense.createdAt,
-      amount: asNumber(expense.amount),
-      shipmentNumber: "-",
-      party: "General Overhead",
-      reference: expense.customConcept?.trim() || expense.conceptCategory.replaceAll("_", " "),
-      expectedDate: expense.dueDate ?? expense.createdAt,
-      actualDate: expense.status === GeneralExpenseStatus.PAID ? expense.dueDate ?? expense.createdAt : null,
-    });
+    const amount = asNumber(expense.amount);
+    const paidAmount = expense.payments.reduce((sum, payment) => sum + asNumber(payment.amount), 0);
+    const outstandingAmount = getOutstanding(amount, paidAmount);
+    const expectedDate = expense.dueDate ?? expense.createdAt;
+    for (const payment of expense.payments) {
+      forecastTransactions.push({
+        id: `gexp-paid-${expense.id}-${payment.paymentDate.toISOString()}`,
+        type: "OUTFLOW",
+        source: "GENERAL_OVERHEAD",
+        date: payment.paymentDate,
+        amount: asNumber(payment.amount),
+        shipmentNumber: "-",
+        party: "General Overhead",
+        reference: expense.customConcept?.trim() || expense.conceptCategory.replaceAll("_", " "),
+        expectedDate,
+        actualDate: payment.paymentDate,
+      });
+    }
+    if (outstandingAmount > 0) {
+      forecastTransactions.push({
+        id: `gexp-open-${expense.id}`,
+        type: "OUTFLOW",
+        source: "GENERAL_OVERHEAD",
+        date: expectedDate,
+        amount: outstandingAmount,
+        shipmentNumber: "-",
+        party: "General Overhead",
+        reference: expense.customConcept?.trim() || expense.conceptCategory.replaceAll("_", " "),
+        expectedDate,
+        actualDate: null,
+      });
+    }
   }
 
   const groupedForecast = new Map<

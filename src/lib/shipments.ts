@@ -131,6 +131,13 @@ export async function getShipmentById(companyId: string, id: string) {
       invoices: {
         orderBy: [{ createdAt: "desc" }],
         include: {
+          payments: {
+            select: {
+              amount: true,
+              paymentDate: true,
+            },
+            orderBy: [{ paymentDate: "asc" }],
+          },
           lines: {
             orderBy: [{ createdAt: "asc" }],
           },

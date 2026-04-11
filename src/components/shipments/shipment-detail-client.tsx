@@ -161,6 +161,9 @@ type ShipmentDetailViewModel = {
     afipCAE?: string | null;
     afipNumber?: string | null;
     afipStatus?: string | null;
+    paidAmount: number;
+    outstandingAmount: number;
+    paymentStatus: "UNPAID" | "PARTIALLY_PAID" | "PAID";
     lines: Array<{
       id: string;
       description: string;
@@ -212,7 +215,7 @@ type Props = {
     createInvoiceDirectAction: (formData: FormData) => Promise<void>;
     upsertInvoiceDirectAction: (formData: FormData) => Promise<void>;
     issueInvoiceAFIPDirectAction: (formData: FormData) => Promise<void>;
-    markInvoicePaidDirectAction: (formData: FormData) => Promise<void>;
+    registerInvoicePaymentDirectAction: (formData: FormData) => Promise<void>;
     cancelInvoiceDirectAction: (formData: FormData) => Promise<void>;
     deleteInvoiceDirectAction: (formData: FormData) => Promise<void>;
   };
@@ -349,9 +352,6 @@ export function ShipmentDetailClient({
     canEditRevenue,
     canDeleteRevenue,
     canViewExpenses,
-    canCreateExpenses,
-    canEditExpenses,
-    canDeleteExpenses,
     canCreateShipmentCosts,
     canEditShipmentCosts,
     canDeleteShipmentCosts,
@@ -371,7 +371,7 @@ export function ShipmentDetailClient({
     createInvoiceDirectAction: createInvoiceAction,
     upsertInvoiceDirectAction: upsertInvoiceAction,
     issueInvoiceAFIPDirectAction: issueInvoiceAFIPAction,
-    markInvoicePaidDirectAction: markInvoicePaidAction,
+    registerInvoicePaymentDirectAction: registerInvoicePaymentAction,
     cancelInvoiceDirectAction: cancelInvoiceAction,
     deleteInvoiceDirectAction: deleteInvoiceAction,
   } = actions;
@@ -1200,13 +1200,27 @@ export function ShipmentDetailClient({
                           </form>
                         ) : null}
                         {canEditInvoices ? (
-                          <form action={markInvoicePaidAction}>
+                          <form action={registerInvoicePaymentAction} className="flex items-center gap-2">
                             <input type="hidden" name="id" value={invoice.id} />
+                            <input
+                              type="number"
+                              name="amount"
+                              min="0.01"
+                              step="0.01"
+                              placeholder="Amount"
+                              className="w-24 rounded-lg border border-slate-200 px-2 py-1 text-xs"
+                            />
+                            <input
+                              type="date"
+                              name="paymentDate"
+                              defaultValue={new Date().toISOString().slice(0, 10)}
+                              className="rounded-lg border border-slate-200 px-2 py-1 text-xs"
+                            />
                             <button
                               type="submit"
                               className="rounded-lg border border-emerald-200 px-2.5 py-1 text-xs font-medium text-emerald-700 transition hover:bg-emerald-50"
                             >
-                              Mark paid
+                              Register payment
                             </button>
                           </form>
                         ) : null}

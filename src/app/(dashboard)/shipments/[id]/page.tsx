@@ -7,7 +7,7 @@ import { getShipmentTimeline } from "@/lib/shipment-timeline";
 import {
   createInvoiceDirectAction,
   issueInvoiceAFIPDirectAction,
-  markInvoicePaidDirectAction,
+  registerShipmentInvoicePaymentDirectAction,
   cancelInvoiceDirectAction,
   deleteInvoiceDirectAction,
   deleteExpenseDirectAction,
@@ -154,6 +154,12 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
   const quotedMarginPctValue = quotedMarginPct ?? null;
   const varianceMarginPct = hasFinancials && quotedMarginPctValue !== null ? marginPct! - quotedMarginPctValue : null;
   const marginDeteriorated = hasFinancials && quotedMarginPctValue !== null ? marginPct! < quotedMarginPctValue : false;
+  const getPaymentStatus = (total: number, paid: number): "UNPAID" | "PARTIALLY_PAID" | "PAID" => {
+    if (total <= 0) return "PAID";
+    if (paid <= 0) return "UNPAID";
+    if (paid + 0.000001 >= total) return "PAID";
+    return "PARTIALLY_PAID";
+  };
 
   return (
     <ShipmentDetailClient
@@ -277,6 +283,16 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
           notes: row.notes,
         })),
         invoices: shipment.invoices.map((row) => ({
+          paidAmount: row.payments.reduce((sum, payment) => sum + Number(payment.amount), 0),
+          outstandingAmount: Math.max(
+            Number(row.total) -
+              row.payments.reduce((sum, payment) => sum + Number(payment.amount), 0),
+            0,
+          ),
+          paymentStatus: getPaymentStatus(
+            Number(row.total),
+            row.payments.reduce((sum, payment) => sum + Number(payment.amount), 0),
+          ),
           id: row.id,
           invoiceNumber: row.invoiceNumber,
           status: row.status as InvoiceStatus,
@@ -345,7 +361,7 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
         createInvoiceDirectAction,
         upsertInvoiceDirectAction,
         issueInvoiceAFIPDirectAction,
-        markInvoicePaidDirectAction,
+        registerInvoicePaymentDirectAction: registerShipmentInvoicePaymentDirectAction,
         cancelInvoiceDirectAction,
         deleteInvoiceDirectAction,
       }}

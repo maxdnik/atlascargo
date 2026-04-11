@@ -274,6 +274,13 @@ enum ActivityActorType {
   SYSTEM
 }
 
+enum PaymentEntityType {
+  INVOICE
+  SHIPMENT_COST
+  EXPENSE
+  GENERAL_EXPENSE
+}
+
 model Company {
   id        String   @id @default(cuid())
   legalName String
@@ -354,6 +361,7 @@ model User {
   milestonesAssigned ShipmentMilestone[]  @relation("MilestoneAssignee")
   tasksAssigned      Task[]               @relation("TaskAssignee")
   activities         ActivityLog[]        @relation("ActivityActor")
+  createdPayments    Payment[]            @relation("PaymentCreator")
   notifications      Notification[]
   uploadedDocuments  ShipmentDocument[]   @relation("DocumentUploader")
 
@@ -944,6 +952,7 @@ model ShipmentCost {
   branch   Branch?  @relation(fields: [branchId], references: [id], onDelete: SetNull)
   shipment Shipment @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
   currency Currency @relation(fields: [currencyCode], references: [code], onDelete: Restrict)
+  payments Payment[]
 
   @@index([companyId, shipmentId, status])
   @@index([companyId, dueDate])
@@ -1015,6 +1024,7 @@ model GeneralExpense {
   company  Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   branch   Branch?  @relation(fields: [branchId], references: [id], onDelete: SetNull)
   currency Currency @relation(fields: [currencyCode], references: [code], onDelete: Restrict)
+  payments Payment[]
 
   @@index([companyId, conceptCategory, status])
   @@index([companyId, dueDate])
@@ -1024,26 +1034,37 @@ model Payment {
   id           String   @id @default(cuid())
   companyId    String
   branchId     String?
+  entityType   PaymentEntityType?
+  entityId     String?
   revenueId    String?
   expenseId    String?
   invoiceId    String?
+  shipmentCostId String?
+  generalExpenseId String?
   currencyCode String
   amount       Decimal
   paymentDate  DateTime
   method       String?
   reference    String?
   notes        String?
+  createdById  String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  company  Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  branch   Branch?  @relation(fields: [branchId], references: [id], onDelete: SetNull)
-  revenue  Revenue? @relation(fields: [revenueId], references: [id], onDelete: SetNull)
-  expense  Expense? @relation(fields: [expenseId], references: [id], onDelete: SetNull)
-  invoice  Invoice? @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
-  currency Currency @relation(fields: [currencyCode], references: [code], onDelete: Restrict)
+  company        Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch         Branch?         @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  revenue        Revenue?        @relation(fields: [revenueId], references: [id], onDelete: SetNull)
+  expense        Expense?        @relation(fields: [expenseId], references: [id], onDelete: SetNull)
+  invoice        Invoice?        @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  shipmentCost   ShipmentCost?   @relation(fields: [shipmentCostId], references: [id], onDelete: SetNull)
+  generalExpense GeneralExpense? @relation(fields: [generalExpenseId], references: [id], onDelete: SetNull)
+  createdBy      User?           @relation("PaymentCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  currency       Currency        @relation(fields: [currencyCode], references: [code], onDelete: Restrict)
 
   @@index([companyId, paymentDate])
+  @@index([companyId, entityType, entityId, paymentDate])
+  @@index([shipmentCostId])
+  @@index([generalExpenseId])
 }
 
 model ExchangeRate {
