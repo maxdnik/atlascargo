@@ -8,20 +8,19 @@ import {
   type InvoiceStatus,
 } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { deriveShipmentFinancialTruth } from "@/lib/finance-truth";
 
 type ShipmentFinanceRecord = {
   shipmentId: string;
   shipmentNumber: string;
   customer: string;
   status: ShipmentStatus;
-  revenue: number;
-  cost: number;
 };
 
 type ForecastTransaction = {
   id: string;
   type: "INFLOW" | "OUTFLOW";
-  source: "AR_INVOICE" | "AP_SHIPMENT_COST" | "GENERAL_OVERHEAD";
+  source: "AR_INVOICE" | "AP_SHIPMENT_COST" | "AP_SHIPMENT_EXPENSE" | "GENERAL_OVERHEAD";
   date: Date;
   amount: number;
   shipmentNumber: string;
@@ -251,8 +250,6 @@ function toMapRow(
     shipmentNumber: fallback.shipmentNumber ?? `Shipment ${shipmentId.slice(0, 8)}`,
     customer: fallback.customer ?? "-",
     status: fallback.status ?? ShipmentStatus.DRAFT,
-    revenue: 0,
-    cost: 0,
   };
   map.set(shipmentId, created);
   return created;
@@ -263,7 +260,8 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
   const currentMonthStart = monthStart(today);
   const currentMonthEnd = monthEnd(today);
 
-  const [shipments, shipmentCosts, generalExpenses, invoices, monthlyPayments] = await Promise.all([
+  const [shipments, shipmentCosts, shipmentExpenses, shipmentRevenues, generalExpenses, invoices, monthlyPayments] =
+    await Promise.all([
     prisma.shipment.findMany({
       where: { companyId },
       select: {
@@ -294,6 +292,58 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
             paymentDate: true,
           },
         },
+        shipment: {
+          select: {
+            shipmentNumber: true,
+            status: true,
+            customer: { select: { legalName: true } },
+          },
+        },
+      },
+    }),
+    prisma.expense.findMany({
+      where: { companyId },
+      select: {
+        id: true,
+        shipmentId: true,
+        supplierName: true,
+        concept: true,
+        amount: true,
+        currencyCode: true,
+        exchangeRate: true,
+        amountBase: true,
+        dueDate: true,
+        status: true,
+        createdAt: true,
+        payments: {
+          select: {
+            amount: true,
+            paymentDate: true,
+          },
+        },
+        shipment: {
+          select: {
+            shipmentNumber: true,
+            status: true,
+            customer: { select: { legalName: true } },
+          },
+        },
+      },
+    }),
+    prisma.revenue.findMany({
+      where: { companyId },
+      select: {
+        id: true,
+        shipmentId: true,
+        customerId: true,
+        concept: true,
+        amount: true,
+        currencyCode: true,
+        exchangeRate: true,
+        amountBase: true,
+        dueDate: true,
+        status: true,
+        createdAt: true,
         shipment: {
           select: {
             shipmentNumber: true,
@@ -376,6 +426,54 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
       },
     }),
   ]);
+  const invoicesByShipment = new Map<
+    string,
+    Array<{
+      total: unknown;
+      status: InvoiceStatus;
+    }>
+  >();
+  for (const invoice of invoices) {
+    const bucket = invoicesByShipment.get(invoice.shipmentId) ?? [];
+    bucket.push({ total: invoice.total, status: invoice.status });
+    invoicesByShipment.set(invoice.shipmentId, bucket);
+  }
+  const revenuesByShipment = new Map<
+    string,
+    Array<{
+      amountBase: unknown;
+      status: FinancialRecordStatus;
+    }>
+  >();
+  for (const revenue of shipmentRevenues) {
+    const bucket = revenuesByShipment.get(revenue.shipmentId) ?? [];
+    bucket.push({ amountBase: revenue.amountBase, status: revenue.status });
+    revenuesByShipment.set(revenue.shipmentId, bucket);
+  }
+  const shipmentCostsByShipment = new Map<
+    string,
+    Array<{
+      amount: unknown;
+      status: ShipmentCostStatus;
+    }>
+  >();
+  for (const shipmentCost of shipmentCosts) {
+    const bucket = shipmentCostsByShipment.get(shipmentCost.shipmentId) ?? [];
+    bucket.push({ amount: shipmentCost.amount, status: shipmentCost.status });
+    shipmentCostsByShipment.set(shipmentCost.shipmentId, bucket);
+  }
+  const expensesByShipment = new Map<
+    string,
+    Array<{
+      amountBase: unknown;
+      status: FinancialRecordStatus;
+    }>
+  >();
+  for (const expense of shipmentExpenses) {
+    const bucket = expensesByShipment.get(expense.shipmentId) ?? [];
+    bucket.push({ amountBase: expense.amountBase, status: expense.status });
+    expensesByShipment.set(expense.shipmentId, bucket);
+  }
 
   const shipmentMap = new Map<string, ShipmentFinanceRecord>();
 
@@ -385,8 +483,6 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
       shipmentNumber: shipment.shipmentNumber,
       customer: shipment.customer.legalName,
       status: shipment.status,
-      revenue: 0,
-      cost: 0,
     });
   }
 
@@ -400,44 +496,63 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
   const shipmentCostsCurrentMonth = shipmentCosts
     .filter((entry) => entry.createdAt >= currentMonthStart && entry.createdAt < currentMonthEnd)
     .reduce((sum, entry) => sum + asNumber(entry.amount), 0);
+  const shipmentExpensesCurrentMonth = shipmentExpenses
+    .filter((entry) => entry.createdAt >= currentMonthStart && entry.createdAt < currentMonthEnd)
+    .reduce((sum, entry) => sum + asNumber(entry.amountBase), 0);
   const generalOverheadCurrentMonth = generalExpenses
     .filter((entry) => entry.createdAt >= currentMonthStart && entry.createdAt < currentMonthEnd)
     .reduce((sum, entry) => sum + asNumber(entry.amount), 0);
 
   for (const invoice of invoices) {
-    if (!invoice.shipment) {
-      continue;
-    }
-    const row = toMapRow(shipmentMap, invoice.shipmentId, {
+    if (!invoice.shipment) continue;
+    toMapRow(shipmentMap, invoice.shipmentId, {
       shipmentNumber: invoice.shipment.shipmentNumber,
       customer: invoice.customer?.legalName ?? "-",
       status: shipmentMap.get(invoice.shipmentId)?.status ?? ShipmentStatus.DRAFT,
     });
-    row.revenue += asNumber(invoice.total);
   }
 
   for (const shipmentCost of shipmentCosts) {
-    const row = toMapRow(shipmentMap, shipmentCost.shipmentId, {
+    toMapRow(shipmentMap, shipmentCost.shipmentId, {
       shipmentNumber: shipmentCost.shipment.shipmentNumber,
       customer: shipmentCost.shipment.customer.legalName,
       status: shipmentCost.shipment.status,
     });
-    row.cost += asNumber(shipmentCost.amount);
+  }
+
+  for (const expense of shipmentExpenses) {
+    toMapRow(shipmentMap, expense.shipmentId, {
+      shipmentNumber: expense.shipment.shipmentNumber,
+      customer: expense.shipment.customer.legalName,
+      status: expense.shipment.status,
+    });
+  }
+
+  for (const revenue of shipmentRevenues) {
+    toMapRow(shipmentMap, revenue.shipmentId, {
+      shipmentNumber: revenue.shipment.shipmentNumber,
+      customer: revenue.shipment.customer.legalName,
+      status: revenue.shipment.status,
+    });
   }
 
   const shipmentProfitability = Array.from(shipmentMap.values())
     .map<ShipmentProfitabilityRow>((entry) => {
-      const margin = entry.revenue - entry.cost;
-      const marginPct = entry.revenue > 0 ? (margin / entry.revenue) * 100 : 0;
-      const incomplete = entry.revenue === 0 || entry.cost === 0;
+      const truth = deriveShipmentFinancialTruth({
+        invoices: invoicesByShipment.get(entry.shipmentId) ?? [],
+        revenues: revenuesByShipment.get(entry.shipmentId) ?? [],
+        shipmentCosts: shipmentCostsByShipment.get(entry.shipmentId) ?? [],
+        expenses: expensesByShipment.get(entry.shipmentId) ?? [],
+      });
+      const incomplete = truth.revenue <= 0 || truth.cost <= 0;
       return {
         shipmentId: entry.shipmentId,
         shipmentNumber: entry.shipmentNumber,
         customer: entry.customer,
-        revenue: entry.revenue,
-        cost: entry.cost,
-        margin,
-        marginPct,
+        revenue: truth.revenue,
+        cost: truth.cost,
+        margin: truth.grossProfit,
+        marginPct: truth.marginPercent ?? 0,
         status: entry.status,
         incomplete,
       };
@@ -540,7 +655,34 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
     };
   });
 
-  const accountsPayable = [...payablesFromShipmentCosts, ...payablesFromGeneralExpenses].sort((a, b) => {
+  const payablesFromShipmentExpenses = shipmentExpenses.map<AccountsPayableRow>((expense) => {
+    const totalAmount = asNumber(expense.amount);
+    const paidAmount = expense.payments.reduce((sum, payment) => sum + asNumber(payment.amount), 0);
+    const outstandingAmount = getOutstanding(totalAmount, paidAmount);
+    const overdueDays = getDaysOverdue(expense.dueDate, today, outstandingAmount);
+    const overdueFlag = overdueDays > 0;
+    const agingBucket = getAgingBucket(expense.dueDate, today, outstandingAmount);
+    return {
+      id: expense.id,
+      entityType: PaymentEntityType.EXPENSE,
+      entityId: expense.id,
+      vendor: expense.supplierName,
+      shipment: expense.shipment.shipmentNumber,
+      reference: expense.concept,
+      currencyCode: expense.currencyCode,
+      totalAmount,
+      paidAmount,
+      outstandingAmount,
+      paymentStatus: getPaymentStatus(totalAmount, paidAmount),
+      dueDate: expense.dueDate,
+      overdueDays,
+      overdueFlag,
+      agingBucket,
+      sourceStatus: expense.status,
+    };
+  });
+
+  const accountsPayable = [...payablesFromShipmentCosts, ...payablesFromShipmentExpenses, ...payablesFromGeneralExpenses].sort((a, b) => {
     const aTime = a.dueDate ? a.dueDate.getTime() : Number.MAX_SAFE_INTEGER;
     const bTime = b.dueDate ? b.dueDate.getTime() : Number.MAX_SAFE_INTEGER;
     return aTime - bTime;
@@ -585,17 +727,20 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
     )
     .reduce((sum, payment) => sum + asNumber(payment.amount), 0);
 
-  const totalCostsCurrentMonth = shipmentCostsCurrentMonth + generalOverheadCurrentMonth;
+  const totalCostsCurrentMonth =
+    shipmentCostsCurrentMonth + shipmentExpensesCurrentMonth + generalOverheadCurrentMonth;
   const overview: FinanceOverview = {
     revenueCurrentMonth,
     shipmentCostsCurrentMonth,
     generalOverheadCurrentMonth,
     totalCostsCurrentMonth,
-    grossMargin: revenueCurrentMonth - shipmentCostsCurrentMonth,
+    grossMargin: revenueCurrentMonth - (shipmentCostsCurrentMonth + shipmentExpensesCurrentMonth),
     netOperatingResult: revenueCurrentMonth - totalCostsCurrentMonth,
     grossMarginPct:
       revenueCurrentMonth > 0
-        ? ((revenueCurrentMonth - shipmentCostsCurrentMonth) / revenueCurrentMonth) * 100
+        ? ((revenueCurrentMonth - (shipmentCostsCurrentMonth + shipmentExpensesCurrentMonth)) /
+            revenueCurrentMonth) *
+          100
         : 0,
     netCashFlow: currentMonthInflows - currentMonthOutflows,
     accountsReceivable: accountsReceivableTotal,
@@ -687,9 +832,9 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
   }
 
   for (const cost of shipmentCosts) {
-    const amount = asNumber(cost.amount);
+    const totalAmount = asNumber(cost.amount);
     const paidAmount = cost.payments.reduce((sum, payment) => sum + asNumber(payment.amount), 0);
-    const outstandingAmount = getOutstanding(amount, paidAmount);
+    const outstandingAmount = getOutstanding(totalAmount, paidAmount);
     const expectedDate = cost.dueDate ?? cost.createdAt;
     for (const payment of cost.payments) {
       forecastTransactions.push({
@@ -715,6 +860,41 @@ export async function getFinanceModuleData(companyId: string): Promise<FinanceMo
         shipmentNumber: cost.shipment.shipmentNumber,
         party: cost.supplierName,
         reference: cost.customConcept?.trim() || cost.conceptCategory.replaceAll("_", " "),
+        expectedDate,
+        actualDate: null,
+      });
+    }
+  }
+
+  for (const expense of shipmentExpenses) {
+    const totalAmount = asNumber(expense.amount);
+    const paidAmount = expense.payments.reduce((sum, payment) => sum + asNumber(payment.amount), 0);
+    const outstandingAmount = getOutstanding(totalAmount, paidAmount);
+    const expectedDate = expense.dueDate ?? expense.createdAt;
+    for (const payment of expense.payments) {
+      forecastTransactions.push({
+        id: `sexp-paid-${expense.id}-${payment.paymentDate.toISOString()}`,
+        type: "OUTFLOW",
+        source: "AP_SHIPMENT_EXPENSE",
+        date: payment.paymentDate,
+        amount: asNumber(payment.amount),
+        shipmentNumber: expense.shipment.shipmentNumber,
+        party: expense.supplierName,
+        reference: expense.concept,
+        expectedDate,
+        actualDate: payment.paymentDate,
+      });
+    }
+    if (outstandingAmount > 0) {
+      forecastTransactions.push({
+        id: `sexp-open-${expense.id}`,
+        type: "OUTFLOW",
+        source: "AP_SHIPMENT_EXPENSE",
+        date: expectedDate,
+        amount: outstandingAmount,
+        shipmentNumber: expense.shipment.shipmentNumber,
+        party: expense.supplierName,
+        reference: expense.concept,
         expectedDate,
         actualDate: null,
       });

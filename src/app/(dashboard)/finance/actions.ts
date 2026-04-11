@@ -769,6 +769,84 @@ export async function registerFinanceShipmentCostPaymentAction(
   }
 }
 
+export async function registerFinanceExpensePaymentAction(
+  _prevState: FinanceActionState,
+  formData: FormData,
+): Promise<FinanceActionState> {
+  try {
+    const ctx = await enforceActionPermission("EXPENSES", "EDIT");
+    const parsed = registerPayablePaymentSchema.parse({
+      entityId: String(formData.get("entityId") || formData.get("id") || "").trim(),
+      amount: formData.get("amount") ? Number(formData.get("amount")) : undefined,
+      paymentDate: String(formData.get("paymentDate") || defaultPaymentDate()),
+      method: formData.get("method") ? String(formData.get("method")) : undefined,
+      reference: formData.get("reference") ? String(formData.get("reference")) : undefined,
+      notes: formData.get("notes") ? String(formData.get("notes")) : undefined,
+    });
+
+    const expense = await prisma.expense.findFirst({
+      where: {
+        id: parsed.entityId,
+        companyId: ctx.companyId,
+      },
+      select: {
+        id: true,
+        currencyCode: true,
+        shipmentId: true,
+        amount: true,
+        payments: {
+          select: {
+            amount: true,
+          },
+        },
+      },
+    });
+    if (!expense) {
+      throw new Error("Shipment expense not found");
+    }
+    const totalAmount = Number(expense.amount);
+    const paidAmount = expense.payments.reduce((sum, payment) => sum + Number(payment.amount), 0);
+    const outstandingAmount = Math.max(totalAmount - paidAmount, 0);
+    if (outstandingAmount <= 0) {
+      throw new Error("Shipment expense is already fully paid");
+    }
+    const amountToRegister = parsed.amount ?? outstandingAmount;
+
+    await registerEntityPayment({
+      companyId: ctx.companyId,
+      branchId: ctx.branchId ?? null,
+      entityType: PaymentEntityType.EXPENSE,
+      entityId: expense.id,
+      amount: amountToRegister,
+      currencyCode: expense.currencyCode,
+      paymentDate: parsed.paymentDate || defaultPaymentDate(),
+      method: parsed.method,
+      reference: parsed.reference,
+      notes: parsed.notes,
+      actor: {
+        actorId: ctx.userId,
+      },
+    });
+    await runAlertChecksForShipmentUpdate({
+      companyId: ctx.companyId,
+      shipmentId: expense.shipmentId,
+    });
+
+    revalidatePath("/finance");
+    revalidatePath("/finance/ap");
+    revalidatePath("/finance/forecast");
+    revalidatePath(`/shipments/${expense.shipmentId}`);
+    revalidatePath("/dashboard");
+    revalidatePath("/dashboard/action-center");
+    return { success: true };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Unable to register shipment expense payment",
+    };
+  }
+}
+
 export async function registerFinanceGeneralExpensePaymentAction(
   _prevState: FinanceActionState,
   formData: FormData,
@@ -849,6 +927,9 @@ export async function registerFinancePayablePaymentAction(
   const entityType = String(formData.get("entityType") || "").trim();
   if (entityType === PaymentEntityType.SHIPMENT_COST) {
     return registerFinanceShipmentCostPaymentAction(_prevState, formData);
+  }
+  if (entityType === PaymentEntityType.EXPENSE) {
+    return registerFinanceExpensePaymentAction(_prevState, formData);
   }
   if (entityType === PaymentEntityType.GENERAL_EXPENSE) {
     return registerFinanceGeneralExpensePaymentAction(_prevState, formData);

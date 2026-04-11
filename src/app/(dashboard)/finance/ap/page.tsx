@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { PaymentEntityType, PermissionAction, PermissionResource } from "@prisma/client";
 import {
+  registerFinanceExpensePaymentAction,
   registerFinanceGeneralExpensePaymentAction,
   registerFinanceShipmentCostPaymentAction,
 } from "@/app/(dashboard)/finance/actions";
@@ -91,6 +92,13 @@ export default async function FinanceAccountsPayablePage({ searchParams }: Accou
     const result = await registerFinanceGeneralExpensePaymentAction({ success: false }, formData);
     if (!result.success) {
       throw new Error(result.error ?? "Unable to register general expense payment");
+    }
+  };
+  const registerShipmentExpensePayment = async (formData: FormData) => {
+    "use server";
+    const result = await registerFinanceExpensePaymentAction({ success: false }, formData);
+    if (!result.success) {
+      throw new Error(result.error ?? "Unable to register shipment expense payment");
     }
   };
 
@@ -241,7 +249,9 @@ export default async function FinanceAccountsPayablePage({ searchParams }: Accou
                           action={
                             row.entityType === PaymentEntityType.SHIPMENT_COST
                               ? registerShipmentCostPayment
-                              : registerGeneralExpensePayment
+                              : row.entityType === PaymentEntityType.EXPENSE
+                                ? registerShipmentExpensePayment
+                                : registerGeneralExpensePayment
                           }
                           className="flex flex-wrap items-end gap-2"
                         >

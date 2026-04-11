@@ -12,6 +12,7 @@ import {
   TransportMode,
 } from "@prisma/client";
 import { deriveShipmentState, isExecutionShipmentStatus } from "@/lib/shipment-state";
+import { deriveShipmentFinancialTruth } from "@/lib/finance-truth";
 
 const TWO_DAYS_MS = 48 * 60 * 60 * 1000;
 
@@ -197,11 +198,18 @@ export function evaluateShipmentAlerts(
     })),
   );
   const openInvoices = shipment.invoices.filter((invoice) => !INVOICE_EXCLUDED_STATUSES.has(invoice.status));
-  const invoiceTotal = openInvoices.reduce((sum, invoice) => sum + asNumber(invoice.total), 0);
-  const shipmentCostTotal = shipment.shipmentCosts.reduce((sum, row) => sum + asNumber(row.amount), 0);
-  const expenseTotal = shipment.expenses.reduce((sum, row) => sum + asNumber(row.amountBase), 0);
-  const totalCosts = shipmentCostTotal + expenseTotal;
-  const actualMargin = invoiceTotal - totalCosts;
+  const financialTruth = deriveShipmentFinancialTruth({
+    invoices: shipment.invoices.map((invoice) => ({
+      status: invoice.status,
+      total: invoice.total,
+    })),
+    revenues: [],
+    shipmentCosts: shipment.shipmentCosts,
+    expenses: shipment.expenses,
+  });
+  const invoiceTotal = financialTruth.revenue;
+  const totalCosts = financialTruth.cost;
+  const actualMargin = financialTruth.grossProfit;
   const quotedMargin = shipment.quote ? asNumber(shipment.quote.marginAmount) : 0;
   const derivedStageIndex = SHIPMENT_STAGE_INDEX[derivedState.masterStatus];
   const rawStageIndex = SHIPMENT_STAGE_INDEX[shipment.status];
