@@ -1,23 +1,10 @@
 import { prisma } from "@/lib/prisma";
 import { MilestoneStatus, QuoteStatus, ShipmentStatus } from "@prisma/client";
 import { listOpenAlertsForCompany } from "@/lib/alerts";
-import { appendFileSync } from "node:fs";
 
 const DEFAULT_COMPANY_ID = "comp_atlascargo";
 
 export async function getDashboardKpis(companyId = DEFAULT_COMPANY_ID) {
-  // #region agent log
-  appendFileSync(
-    "/opt/cursor/logs/debug.log",
-    JSON.stringify({
-      hypothesisId: "B",
-      location: "src/lib/dashboard.ts:getDashboardKpis:entry",
-      message: "Entering getDashboardKpis",
-      data: { companyId },
-      timestamp: Date.now(),
-    }) + "\n",
-  );
-  // #endregion
   const [openShipments, delayedMilestones, quotesSent, financeAgg] =
     await Promise.all([
       prisma.shipment.count({
@@ -56,24 +43,6 @@ export async function getDashboardKpis(companyId = DEFAULT_COMPANY_ID) {
         },
       }),
     ]);
-  // #region agent log
-  appendFileSync(
-    "/opt/cursor/logs/debug.log",
-    JSON.stringify({
-      hypothesisId: "B",
-      location: "src/lib/dashboard.ts:getDashboardKpis:post_primary_queries",
-      message: "Primary dashboard queries resolved",
-      data: {
-        openShipments,
-        delayedMilestones,
-        quotesSent,
-        financeAggCount: financeAgg.length,
-      },
-      timestamp: Date.now(),
-    }) + "\n",
-  );
-  // #endregion
-
   const totalRevenueBase = financeAgg
     .flatMap((shipment) => shipment.revenues)
     .reduce((acc, row) => acc + Number(row.amountBase ?? 0), 0);
@@ -328,23 +297,6 @@ export async function getDashboardKpis(companyId = DEFAULT_COMPANY_ID) {
         ],
       }
     : null;
-
-  // #region agent log
-  appendFileSync(
-    "/opt/cursor/logs/debug.log",
-    JSON.stringify({
-      hypothesisId: "B",
-      location: "src/lib/dashboard.ts:getDashboardKpis:exit",
-      message: "Exiting getDashboardKpis",
-      data: {
-        alertsCount: alerts.length,
-        activityRowCount: activityRows.length,
-        hasTrackingPanel: Boolean(trackingPanel),
-      },
-      timestamp: Date.now(),
-    }) + "\n",
-  );
-  // #endregion
 
   return {
     openShipments,

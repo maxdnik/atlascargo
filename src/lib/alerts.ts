@@ -4,7 +4,6 @@ import { evaluateCompanyAlerts, type ShipmentAlertSnapshot } from "@/lib/action-
 import type { Prisma } from "@prisma/client";
 import { ActivityAction, ActivityActorType, EntityType } from "@prisma/client";
 import { recordAuditEvent } from "@/lib/audit";
-import { appendFileSync } from "node:fs";
 
 type AlertSyncResult = {
   created: number;
@@ -21,21 +20,6 @@ async function normalizeLegacyAlertSeverities(companyId: string) {
       AND "severity" IN ('HIGH', 'MEDIUM', 'LOW')
     GROUP BY "severity"
   `;
-  // #region agent log
-  appendFileSync(
-    "/opt/cursor/logs/debug.log",
-    JSON.stringify({
-      hypothesisId: "C",
-      location: "src/lib/alerts.ts:normalizeLegacyAlertSeverities:before_update",
-      message: "Checked legacy alert severities",
-      data: {
-        companyId,
-        legacyRows: legacyRows.map((row) => ({ severity: row.severity, count: Number(row.count) })),
-      },
-      timestamp: Date.now(),
-    }) + "\n",
-  );
-  // #endregion
   if (legacyRows.length === 0) return;
 
   await prisma.$executeRaw`
@@ -57,24 +41,6 @@ async function normalizeLegacyAlertSeverities(companyId: string) {
       AND "severity" IN ('HIGH', 'MEDIUM', 'LOW')
     GROUP BY "severity"
   `;
-  // #region agent log
-  appendFileSync(
-    "/opt/cursor/logs/debug.log",
-    JSON.stringify({
-      hypothesisId: "C",
-      location: "src/lib/alerts.ts:normalizeLegacyAlertSeverities:after_update",
-      message: "Normalized legacy alert severities",
-      data: {
-        companyId,
-        remainingLegacyRows: remainingLegacyRows.map((row) => ({
-          severity: row.severity,
-          count: Number(row.count),
-        })),
-      },
-      timestamp: Date.now(),
-    }) + "\n",
-  );
-  // #endregion
 }
 
 async function normalizeLegacyAlertTypes(companyId: string) {
@@ -90,21 +56,6 @@ async function normalizeLegacyAlertTypes(companyId: string) {
       )
     GROUP BY "type"
   `;
-  // #region agent log
-  appendFileSync(
-    "/opt/cursor/logs/debug.log",
-    JSON.stringify({
-      hypothesisId: "D",
-      location: "src/lib/alerts.ts:normalizeLegacyAlertTypes:before_update",
-      message: "Checked legacy alert types",
-      data: {
-        companyId,
-        legacyRows: legacyRows.map((row) => ({ type: row.type, count: Number(row.count) })),
-      },
-      timestamp: Date.now(),
-    }) + "\n",
-  );
-  // #endregion
   if (legacyRows.length === 0) return;
 
   await prisma.$executeRaw`
@@ -137,24 +88,6 @@ async function normalizeLegacyAlertTypes(companyId: string) {
       )
     GROUP BY "type"
   `;
-  // #region agent log
-  appendFileSync(
-    "/opt/cursor/logs/debug.log",
-    JSON.stringify({
-      hypothesisId: "D",
-      location: "src/lib/alerts.ts:normalizeLegacyAlertTypes:after_update",
-      message: "Normalized legacy alert types",
-      data: {
-        companyId,
-        remainingLegacyRows: remainingLegacyRows.map((row) => ({
-          type: row.type,
-          count: Number(row.count),
-        })),
-      },
-      timestamp: Date.now(),
-    }) + "\n",
-  );
-  // #endregion
 }
 
 export type AlertFeedRow = {
@@ -537,26 +470,6 @@ export async function listAlertsForCompany(
   };
   const orderBy: Prisma.AlertOrderByWithRelationInput[] = [{ createdAt: "desc" }];
   const take = Math.max(1, Math.min(filters.limit ?? 80, 250));
-  // #region agent log
-  appendFileSync(
-    "/opt/cursor/logs/debug.log",
-    JSON.stringify({
-      hypothesisId: "A",
-      location: "src/lib/alerts.ts:listAlertsForCompany:before_query",
-      message: "Prepared alerts query inputs",
-      data: {
-        companyId: scope.companyId,
-        statusFilter: filters.status ?? null,
-        typeFilter: filters.type ?? null,
-        severityFilter: filters.severity ?? null,
-        hasScopeQuery: Boolean(query),
-        orderByKeys: Object.keys(orderBy[0] ?? {}),
-        take,
-      },
-      timestamp: Date.now(),
-    }) + "\n",
-  );
-  // #endregion
   let rows;
   try {
     rows = await prisma.alert.findMany({
@@ -579,35 +492,8 @@ export async function listAlertsForCompany(
       take,
     });
   } catch (error) {
-    // #region agent log
-    appendFileSync(
-      "/opt/cursor/logs/debug.log",
-      JSON.stringify({
-        hypothesisId: "A",
-        location: "src/lib/alerts.ts:listAlertsForCompany:query_error",
-        message: "Alerts query failed",
-        data: {
-          companyId: scope.companyId,
-          errorMessage: error instanceof Error ? error.message : String(error),
-        },
-        timestamp: Date.now(),
-      }) + "\n",
-    );
-    // #endregion
     throw error;
   }
-  // #region agent log
-  appendFileSync(
-    "/opt/cursor/logs/debug.log",
-    JSON.stringify({
-      hypothesisId: "A",
-      location: "src/lib/alerts.ts:listAlertsForCompany:after_query",
-      message: "Alerts query succeeded",
-      data: { rowCount: rows.length },
-      timestamp: Date.now(),
-    }) + "\n",
-  );
-  // #endregion
 
   const severityRank: Record<AlertSeverity, number> = {
     [AlertSeverity.CRITICAL]: 0,
