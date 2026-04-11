@@ -124,6 +124,8 @@ enum ShipmentPartyRole {
 }
 
 enum DocumentType {
+  BL
+  AWB
   COMMERCIAL_INVOICE
   PACKING_LIST
   HBL
@@ -207,10 +209,44 @@ enum NotificationLevel {
   SUCCESS
 }
 
+enum AlertType {
+  ETA_DELAY
+  MISSING_BL
+  CUSTOMS_DELAY
+  SHIPMENT_STUCK_IN_STAGE
+  MISSING_INVOICE_AFTER_DEPARTURE
+  NEGATIVE_MARGIN
+  LOW_MARGIN_VS_QUOTE
+  COST_WITHOUT_REVENUE
+  OVERDUE_RECEIVABLE
+  OVERDUE_PAYABLE
+  MISSING_CRITICAL_MILESTONE
+  SHIPMENT_WITH_INCONSISTENT_STATE
+}
+
+enum AlertSeverity {
+  CRITICAL
+  WARNING
+  INFO
+}
+
+enum AlertStatus {
+  OPEN
+  RESOLVED
+  REOPENED
+}
+
 enum ActivityAction {
   CREATE
   UPDATE
   DELETE
+  STATUS_CHANGE
+  ISSUE
+  MARK_PAID
+  PARSE_DOCUMENT
+  APPLY_DOCUMENT_DATA
+  RESOLVE
+  REOPEN
   CONVERT
   APPROVE
   LOGIN
@@ -225,9 +261,24 @@ enum EntityType {
   DOCUMENT
   REVENUE
   EXPENSE
+  SHIPMENT_COST
+  INVOICE
   TASK
   USER
   SETTINGS
+  ALERT
+}
+
+enum ActivityActorType {
+  USER
+  SYSTEM
+}
+
+enum PaymentEntityType {
+  INVOICE
+  SHIPMENT_COST
+  EXPENSE
+  GENERAL_EXPENSE
 }
 
 model Company {
@@ -259,6 +310,7 @@ model Company {
   tasks         Task[]
   notes         Note[]
   activities    ActivityLog[]
+  alerts        Alert[]
 }
 
 model Branch {
@@ -309,6 +361,7 @@ model User {
   milestonesAssigned ShipmentMilestone[]  @relation("MilestoneAssignee")
   tasksAssigned      Task[]               @relation("TaskAssignee")
   activities         ActivityLog[]        @relation("ActivityActor")
+  createdPayments    Payment[]            @relation("PaymentCreator")
   notifications      Notification[]
   uploadedDocuments  ShipmentDocument[]   @relation("DocumentUploader")
 
@@ -481,6 +534,7 @@ model Customer {
   revenues  Revenue[]
   invoices  Invoice[]
   notes     Note[]
+  alerts    Alert[]
 
   @@unique([companyId, code])
   @@index([companyId, legalName])
@@ -571,6 +625,12 @@ model Quote {
   totalSell     Decimal        @default(0)
   marginAmount  Decimal        @default(0)
   marginPct     Decimal        @default(0)
+  estimatedTransitTimeDays Int?
+  suggestedCarrier       String?
+  suggestedSupplier      String?
+  serviceLevelAssumption String?
+  routeAssumption        String?
+  assumptionsNotes       String?
   internalNotes String?
   sentAt        DateTime?
   approvedAt    DateTime?
@@ -630,6 +690,19 @@ model Shipment {
   shipmentNumber       String
   customerId           String
   quoteId              String?        @unique
+  quoteSnapshot        Json?
+  quotedSellAmount     Decimal?
+  quotedCostAmount     Decimal?
+  quotedGrossProfit    Decimal?
+  quotedMarginPercent  Decimal?
+  quotedTransitTimeDays Int?
+  quotedMode           TransportMode?
+  quotedDirection      TradeDirection?
+  quotedOrigin         String?
+  quotedDestination    String?
+  quotedChargeBreakdown   Json?
+  quotedSupplierSuggestions Json?
+  quotedAssumptionsNotes  String?
   ownerUserId          String?
   mode                 TransportMode
   direction            TradeDirection
@@ -699,6 +772,7 @@ model Shipment {
   invoices           Invoice[]
   tasks              Task[]
   notesLog           Note[]
+  alerts             Alert[]
 
   @@unique([companyId, shipmentNumber])
   @@index([shipmentNumber])
@@ -897,6 +971,7 @@ model ShipmentCost {
   branch   Branch?  @relation(fields: [branchId], references: [id], onDelete: SetNull)
   shipment Shipment @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
   currency Currency @relation(fields: [currencyCode], references: [code], onDelete: Restrict)
+  payments Payment[]
 
   @@index([companyId, shipmentId, status])
   @@index([companyId, dueDate])
@@ -968,6 +1043,7 @@ model GeneralExpense {
   company  Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   branch   Branch?  @relation(fields: [branchId], references: [id], onDelete: SetNull)
   currency Currency @relation(fields: [currencyCode], references: [code], onDelete: Restrict)
+  payments Payment[]
 
   @@index([companyId, conceptCategory, status])
   @@index([companyId, dueDate])
@@ -977,26 +1053,37 @@ model Payment {
   id           String   @id @default(cuid())
   companyId    String
   branchId     String?
+  entityType   PaymentEntityType?
+  entityId     String?
   revenueId    String?
   expenseId    String?
   invoiceId    String?
+  shipmentCostId String?
+  generalExpenseId String?
   currencyCode String
   amount       Decimal
   paymentDate  DateTime
   method       String?
   reference    String?
   notes        String?
+  createdById  String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  company  Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  branch   Branch?  @relation(fields: [branchId], references: [id], onDelete: SetNull)
-  revenue  Revenue? @relation(fields: [revenueId], references: [id], onDelete: SetNull)
-  expense  Expense? @relation(fields: [expenseId], references: [id], onDelete: SetNull)
-  invoice  Invoice? @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
-  currency Currency @relation(fields: [currencyCode], references: [code], onDelete: Restrict)
+  company        Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch         Branch?         @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  revenue        Revenue?        @relation(fields: [revenueId], references: [id], onDelete: SetNull)
+  expense        Expense?        @relation(fields: [expenseId], references: [id], onDelete: SetNull)
+  invoice        Invoice?        @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  shipmentCost   ShipmentCost?   @relation(fields: [shipmentCostId], references: [id], onDelete: SetNull)
+  generalExpense GeneralExpense? @relation(fields: [generalExpenseId], references: [id], onDelete: SetNull)
+  createdBy      User?           @relation("PaymentCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  currency       Currency        @relation(fields: [currencyCode], references: [code], onDelete: Restrict)
 
   @@index([companyId, paymentDate])
+  @@index([companyId, entityType, entityId, paymentDate])
+  @@index([shipmentCostId])
+  @@index([generalExpenseId])
 }
 
 model ExchangeRate {
@@ -1056,6 +1143,15 @@ model ActivityLog {
   entityType EntityType
   entityId   String
   action     ActivityAction
+  actorType  ActivityActorType @default(USER)
+  actorName  String?
+  shipmentId String?
+  customerId String?
+  field      String?
+  oldValue   String?
+  newValue   String?
+  summary    String?
+  metadata   Json?
   beforeJson Json?
   afterJson  Json?
   actorId    String?
@@ -1068,6 +1164,9 @@ model ActivityLog {
 
   @@index([entityType, entityId, createdAt])
   @@index([companyId, createdAt])
+  @@index([companyId, entityType, entityId, createdAt])
+  @@index([companyId, shipmentId, createdAt])
+  @@index([companyId, customerId, createdAt])
 }
 
 model Notification {
@@ -1083,4 +1182,34 @@ model Notification {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, readAt, createdAt])
+}
+
+model Alert {
+  id                String        @id @default(cuid())
+  companyId         String
+  type              AlertType
+  severity          AlertSeverity
+  status            AlertStatus   @default(OPEN)
+  ruleKey           String
+  source            String        @default("rules-engine")
+  title             String
+  description       String
+  recommendedAction String?
+  shipmentId        String?
+  customerId        String?
+  metadata          Json?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  resolvedAt        DateTime?
+
+  company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  shipment Shipment? @relation(fields: [shipmentId], references: [id], onDelete: SetNull)
+  customer Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  @@unique([companyId, ruleKey])
+  @@index([companyId, status, createdAt])
+  @@index([companyId, severity, status])
+  @@index([companyId, type, status])
+  @@index([shipmentId, status])
+  @@index([customerId, status])
 }

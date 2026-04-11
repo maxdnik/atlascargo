@@ -406,6 +406,12 @@ async function main() {
       totalSell: "3050.00",
       marginAmount: "700.00",
       marginPct: "0.2295",
+      estimatedTransitTimeDays: 7,
+      suggestedCarrier: "Lufthansa Cargo",
+      suggestedSupplier: "Lufthansa Cargo",
+      serviceLevelAssumption: "Airport to Door",
+      routeAssumption: "MIA -> EZE direct uplift",
+      assumptionsNotes: "Pricing assumes direct uplift and expedited customs release.",
       approvedAt: new Date("2026-04-02T15:30:00.000Z"),
     },
   });

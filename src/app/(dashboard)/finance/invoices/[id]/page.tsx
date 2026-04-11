@@ -4,7 +4,7 @@ import { PermissionAction, PermissionResource } from "@prisma/client";
 import {
   cancelFinanceInvoiceAction,
   issueFinanceInvoiceAfipAction,
-  markFinanceInvoicePaidAction,
+  registerFinanceInvoicePaymentAction,
 } from "@/app/(dashboard)/finance/actions";
 import { FinanceInvoiceEditor } from "@/components/finance/invoice-editor";
 import { FinanceShell } from "@/components/finance/finance-shell";
@@ -70,9 +70,9 @@ export default async function FinanceInvoiceDetailPage({ params }: FinanceInvoic
   };
   const markInvoicePaid = async (formData: FormData) => {
     "use server";
-    const result = await markFinanceInvoicePaidAction({ success: false }, formData);
+    const result = await registerFinanceInvoicePaymentAction({ success: false }, formData);
     if (!result.success) {
-      throw new Error(result.error ?? "Unable to mark invoice paid");
+      throw new Error(result.error ?? "Unable to register invoice payment");
     }
   };
   const cancelInvoice = async (formData: FormData) => {

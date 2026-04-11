@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { PermissionAction, PermissionResource, InvoiceLineType } from "@prisma/client";
+import { PermissionAction, PermissionResource } from "@prisma/client";
 import { FinanceShell } from "@/components/finance/finance-shell";
 import { resolveFinanceNavItems } from "@/lib/finance-navigation";
 import { listInvoicesForAr } from "@/lib/finance";
@@ -10,7 +10,7 @@ import {
   createFinanceInvoiceAction,
   deleteFinanceInvoiceAction,
   issueFinanceInvoiceAfipAction,
-  markFinanceInvoicePaidAction,
+  registerFinanceInvoicePaymentAction,
 } from "@/app/(dashboard)/finance/actions";
 import { prisma } from "@/lib/prisma";
 import { InvoiceForm } from "@/app/(dashboard)/finance/invoices/invoice-form";
@@ -100,7 +100,7 @@ export default async function FinanceInvoicesPage() {
   };
   const markPaid = async (formData: FormData) => {
     "use server";
-    await markFinanceInvoicePaidAction({ success: false }, formData);
+    await registerFinanceInvoicePaymentAction({ success: false }, formData);
   };
   const cancelInvoice = async (formData: FormData) => {
     "use server";
@@ -206,11 +206,12 @@ export default async function FinanceInvoicesPage() {
                         {canEditRevenue ? (
                           <form action={markPaid}>
                             <input type="hidden" name="invoiceId" value={invoice.id} />
+                            <input type="hidden" name="amount" value={invoice.total.toFixed(2)} />
                             <button
                               type="submit"
                               className="rounded-lg border border-emerald-200 px-2.5 py-1 text-xs font-medium text-emerald-700 transition hover:bg-emerald-50"
                             >
-                              Paid
+                              Register payment
                             </button>
                           </form>
                         ) : null}
