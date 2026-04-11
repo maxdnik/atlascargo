@@ -37,6 +37,10 @@ import {
   updateInvoiceHeader,
 } from "@/lib/invoices";
 import { registerEntityPayment } from "@/lib/payments";
+import {
+  buildQuoteContinuitySnapshot,
+  toPrismaJson,
+} from "@/lib/shipment-quote-continuity";
 
 const TRANSPORT_MODES = ["AIR", "OCEAN", "ROAD", "COURIER"] as const;
 const TRADE_DIRECTIONS = ["IMPORT", "EXPORT"] as const;
@@ -461,6 +465,7 @@ export async function createShipmentAction(
     let approvedQuote:
       | {
           id: string;
+          quoteNumber: string;
           status: QuoteStatus;
           approvedAt: Date | null;
           customerId: string;
@@ -476,6 +481,25 @@ export async function createShipmentAction(
           placeOfReceipt: string | null;
           placeOfDelivery: string | null;
           commodity: string | null;
+          totalSell: Prisma.Decimal;
+          totalBuy: Prisma.Decimal;
+          marginAmount: Prisma.Decimal;
+          marginPct: Prisma.Decimal;
+          currencyCode: string;
+          estimatedTransitTimeDays: number | null;
+          suggestedCarrier: string | null;
+          suggestedSupplier: string | null;
+          serviceLevelAssumption: string | null;
+          routeAssumption: string | null;
+          assumptionsNotes: string | null;
+          internalNotes: string | null;
+          charges: Array<{
+            concept: string;
+            chargeType: string | null;
+            buyAmount: Prisma.Decimal;
+            sellAmount: Prisma.Decimal;
+            currencyCode: string;
+          }>;
         }
       | null = null;
 
@@ -488,6 +512,7 @@ export async function createShipmentAction(
         },
         select: {
           id: true,
+          quoteNumber: true,
           status: true,
           approvedAt: true,
           customerId: true,
@@ -503,6 +528,28 @@ export async function createShipmentAction(
           placeOfReceipt: true,
           placeOfDelivery: true,
           commodity: true,
+          totalSell: true,
+          totalBuy: true,
+          marginAmount: true,
+          marginPct: true,
+          currencyCode: true,
+          estimatedTransitTimeDays: true,
+          suggestedCarrier: true,
+          suggestedSupplier: true,
+          serviceLevelAssumption: true,
+          routeAssumption: true,
+          assumptionsNotes: true,
+          internalNotes: true,
+          charges: {
+            select: {
+              concept: true,
+              chargeType: true,
+              buyAmount: true,
+              sellAmount: true,
+              currencyCode: true,
+            },
+            orderBy: [{ createdAt: "asc" }],
+          },
         },
       });
 
@@ -548,6 +595,7 @@ export async function createShipmentAction(
       { atd, deliveredAt, etd, eta, ata },
       normalizedRefs,
     );
+    const quoteSnapshot = approvedQuote ? buildQuoteContinuitySnapshot(approvedQuote) : null;
 
     const created = await prisma.$transaction(async (tx) => {
       const generatedShipmentNumber = await nextShipmentNumber(
@@ -611,6 +659,23 @@ export async function createShipmentAction(
           ata,
           deliveredAt,
           notes: normalizeOptional(parsed.notes),
+          quoteSnapshot: quoteSnapshot ? toPrismaJson(quoteSnapshot) : undefined,
+          quotedSellAmount: quoteSnapshot?.quotedSellAmount,
+          quotedCostAmount: quoteSnapshot?.quotedCostAmount,
+          quotedGrossProfit: quoteSnapshot?.quotedGrossProfit,
+          quotedMarginPercent: quoteSnapshot?.quotedMarginPercent,
+          quotedTransitTimeDays: quoteSnapshot?.quotedTransitTimeDays ?? null,
+          quotedMode: quoteSnapshot?.quotedMode,
+          quotedDirection: quoteSnapshot?.quotedDirection,
+          quotedOrigin: quoteSnapshot?.quotedOrigin,
+          quotedDestination: quoteSnapshot?.quotedDestination,
+          quotedChargeBreakdown: quoteSnapshot
+            ? toPrismaJson(quoteSnapshot.quotedChargeBreakdown)
+            : undefined,
+          quotedSupplierSuggestions: quoteSnapshot
+            ? toPrismaJson(quoteSnapshot.quotedSupplierSuggestions)
+            : undefined,
+          quotedAssumptionsNotes: quoteSnapshot?.quotedAssumptionsNotes ?? null,
         },
       });
 
@@ -2527,6 +2592,28 @@ export async function createShipmentFromQuoteAction(
         placeOfReceipt: true,
         placeOfDelivery: true,
         commodity: true,
+        totalSell: true,
+        totalBuy: true,
+        marginAmount: true,
+        marginPct: true,
+        currencyCode: true,
+        estimatedTransitTimeDays: true,
+        suggestedCarrier: true,
+        suggestedSupplier: true,
+        serviceLevelAssumption: true,
+        routeAssumption: true,
+        assumptionsNotes: true,
+        internalNotes: true,
+        charges: {
+          select: {
+            concept: true,
+            chargeType: true,
+            buyAmount: true,
+            sellAmount: true,
+            currencyCode: true,
+          },
+          orderBy: [{ createdAt: "asc" }],
+        },
         shipment: {
           select: { id: true },
         },
@@ -2539,6 +2626,7 @@ export async function createShipmentFromQuoteAction(
     if (quote.shipment) {
       throw new Error("Approved quote already has a shipment");
     }
+    const quoteSnapshot = buildQuoteContinuitySnapshot(quote);
 
     const created = await prisma.$transaction(async (tx) => {
       const shipmentNumber = await nextShipmentNumber(tx, ctx.companyId, quote.mode, quote.direction);
@@ -2564,6 +2652,19 @@ export async function createShipmentFromQuoteAction(
           placeOfDelivery: quote.placeOfDelivery,
           commodity: quote.commodity,
           notes: `Converted from approved quote ${quote.quoteNumber}`,
+          quoteSnapshot: toPrismaJson(quoteSnapshot),
+          quotedSellAmount: quoteSnapshot.quotedSellAmount,
+          quotedCostAmount: quoteSnapshot.quotedCostAmount,
+          quotedGrossProfit: quoteSnapshot.quotedGrossProfit,
+          quotedMarginPercent: quoteSnapshot.quotedMarginPercent,
+          quotedTransitTimeDays: quoteSnapshot.quotedTransitTimeDays ?? null,
+          quotedMode: quoteSnapshot.quotedMode,
+          quotedDirection: quoteSnapshot.quotedDirection,
+          quotedOrigin: quoteSnapshot.quotedOrigin,
+          quotedDestination: quoteSnapshot.quotedDestination,
+          quotedChargeBreakdown: toPrismaJson(quoteSnapshot.quotedChargeBreakdown),
+          quotedSupplierSuggestions: toPrismaJson(quoteSnapshot.quotedSupplierSuggestions),
+          quotedAssumptionsNotes: quoteSnapshot.quotedAssumptionsNotes ?? null,
         },
       });
 

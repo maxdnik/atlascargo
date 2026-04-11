@@ -625,6 +625,12 @@ model Quote {
   totalSell     Decimal        @default(0)
   marginAmount  Decimal        @default(0)
   marginPct     Decimal        @default(0)
+  estimatedTransitTimeDays Int?
+  suggestedCarrier       String?
+  suggestedSupplier      String?
+  serviceLevelAssumption String?
+  routeAssumption        String?
+  assumptionsNotes       String?
   internalNotes String?
   sentAt        DateTime?
   approvedAt    DateTime?
@@ -684,6 +690,19 @@ model Shipment {
   shipmentNumber       String
   customerId           String
   quoteId              String?        @unique
+  quoteSnapshot        Json?
+  quotedSellAmount     Decimal?
+  quotedCostAmount     Decimal?
+  quotedGrossProfit    Decimal?
+  quotedMarginPercent  Decimal?
+  quotedTransitTimeDays Int?
+  quotedMode           TransportMode?
+  quotedDirection      TradeDirection?
+  quotedOrigin         String?
+  quotedDestination    String?
+  quotedChargeBreakdown   Json?
+  quotedSupplierSuggestions Json?
+  quotedAssumptionsNotes  String?
   ownerUserId          String?
   mode                 TransportMode
   direction            TradeDirection

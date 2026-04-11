@@ -4,6 +4,7 @@ import { PermissionAction, PermissionResource } from "@prisma/client";
 import { getShipmentById } from "@/lib/shipments";
 import { listCustomers } from "@/lib/customers";
 import { getShipmentTimeline } from "@/lib/shipment-timeline";
+import { getShipmentQuoteContinuity } from "@/lib/shipment-quote-continuity";
 import {
   createInvoiceDirectAction,
   issueInvoiceAFIPDirectAction,
@@ -140,20 +141,46 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
     notFound();
   }
 
-  const invoicedRevenue = shipment.invoices.reduce((sum, row) => sum + Number(row.total), 0);
-  const totalShipmentCost = shipment.shipmentCosts.reduce((sum, row) => sum + Number(row.amount), 0);
-  const grossProfit = invoicedRevenue - totalShipmentCost;
-  const marginPct = invoicedRevenue > 0 ? (grossProfit / invoicedRevenue) * 100 : null;
-  const quotedSell = shipment.quote ? Number(shipment.quote.totalSell) : null;
-  const quotedCost = shipment.quote ? Number(shipment.quote.totalBuy) : null;
-  const quotedMarginAmount = shipment.quote ? Number(shipment.quote.marginAmount) : null;
-  const quotedMarginPct = shipment.quote ? Number(shipment.quote.marginPct) * 100 : null;
-  const hasRevenue = shipment.invoices.length > 0 && invoicedRevenue > 0;
-  const hasCosts = shipment.shipmentCosts.length > 0 && totalShipmentCost > 0;
-  const hasFinancials = hasRevenue && hasCosts;
-  const quotedMarginPctValue = quotedMarginPct ?? null;
-  const varianceMarginPct = hasFinancials && quotedMarginPctValue !== null ? marginPct! - quotedMarginPctValue : null;
-  const marginDeteriorated = hasFinancials && quotedMarginPctValue !== null ? marginPct! < quotedMarginPctValue : false;
+  const continuity = getShipmentQuoteContinuity({
+    quotedSellAmount: shipment.quotedSellAmount,
+    quotedCostAmount: shipment.quotedCostAmount,
+    quotedGrossProfit: shipment.quotedGrossProfit,
+    quotedMarginPercent: shipment.quotedMarginPercent,
+    quotedTransitTimeDays: shipment.quotedTransitTimeDays,
+    quotedMode: shipment.quotedMode,
+    quotedDirection: shipment.quotedDirection,
+    quotedOrigin: shipment.quotedOrigin,
+    quotedDestination: shipment.quotedDestination,
+    quotedAssumptionsNotes: shipment.quotedAssumptionsNotes,
+    quotedChargeBreakdown: shipment.quotedChargeBreakdown,
+    quotedSupplierSuggestions: shipment.quotedSupplierSuggestions,
+    quoteSnapshot: shipment.quoteSnapshot,
+    originCode: shipment.originCode,
+    destinationCode: shipment.destinationCode,
+    pol: shipment.pol,
+    pod: shipment.pod,
+    carrierName: shipment.carrierName,
+    serviceLevel: shipment.serviceLevel,
+    atd: shipment.atd,
+    ata: shipment.ata,
+    milestones: shipment.milestones.map((row) => ({
+      code: row.code,
+      actualAt: row.actualAt,
+    })),
+    invoices: shipment.invoices.map((row) => ({ total: row.total })),
+    shipmentCosts: shipment.shipmentCosts.map((row) => ({
+      supplierName: row.supplierName,
+      amount: row.amount,
+      conceptCategory: row.conceptCategory,
+      customConcept: row.customConcept,
+    })),
+    expenses: shipment.expenses.map((row) => ({
+      supplierName: row.supplierName,
+      amountBase: row.amountBase,
+      concept: row.concept,
+    })),
+  });
+
   const getPaymentStatus = (total: number, paid: number): "UNPAID" | "PARTIALLY_PAID" | "PAID" => {
     if (total <= 0) return "PAID";
     if (paid <= 0) return "UNPAID";
@@ -211,24 +238,14 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
         containerCount: shipment.containerCount,
         containerType: shipment.containerType,
         notes: shipment.notes,
-        quoteFinancials: {
-          hasQuote: Boolean(shipment.quote),
-          quotedSell,
-          quotedCost,
-          quotedMarginAmount,
-          quotedMarginPct,
-        },
-        actualFinancials: {
-          invoicedRevenue,
-          totalShipmentCost,
-          grossProfit,
-          marginPct,
-          varianceMarginPct,
-          hasRevenue,
-          hasCosts,
-          hasFinancials,
-          marginDeteriorated,
-        },
+        quoteSnapshotCapturedAt:
+          shipment.quoteSnapshot &&
+          typeof shipment.quoteSnapshot === "object" &&
+          "capturedAt" in shipment.quoteSnapshot &&
+          typeof shipment.quoteSnapshot.capturedAt === "string"
+            ? shipment.quoteSnapshot.capturedAt
+            : null,
+        quoteContinuity: continuity,
         milestones: shipment.milestones.map((milestone) => ({
           id: milestone.id,
           code: milestone.code,
