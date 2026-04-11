@@ -80,6 +80,27 @@ async function main() {
     },
   });
 
+  const portalPasswordHash = await bcrypt.hash("Client123!", 10);
+  const portalUser = await prisma.user.upsert({
+    where: { companyId_email: { companyId: company.id, email: "client@acme.portal" } },
+    update: {
+      name: "Acme Portal User",
+      role: UserRole.CUSTOMER_SERVICE,
+      isActive: true,
+      isPortalUser: true,
+    },
+    create: {
+      id: "user_client_acme",
+      companyId: company.id,
+      email: "client@acme.portal",
+      name: "Acme Portal User",
+      passwordHash: portalPasswordHash,
+      role: UserRole.CUSTOMER_SERVICE,
+      isActive: true,
+      isPortalUser: true,
+    },
+  });
+
   await prisma.userRoleAssignment.deleteMany({
     where: {
       userId: adminUser.id,
@@ -349,6 +370,24 @@ async function main() {
     },
   });
 
+  await prisma.customerPortalAccess.upsert({
+    where: {
+      userId_customerId: {
+        userId: portalUser.id,
+        customerId: customerAirImport.id,
+      },
+    },
+    update: {
+      isActive: true,
+    },
+    create: {
+      userId: portalUser.id,
+      companyId: company.id,
+      customerId: customerAirImport.id,
+      isActive: true,
+    },
+  });
+
   await prisma.contact.upsert({
     where: { id: "contact_acme_lucia" },
     update: {},
@@ -407,6 +446,17 @@ async function main() {
       marginAmount: "700.00",
       marginPct: "0.2295",
       approvedAt: new Date("2026-04-02T15:30:00.000Z"),
+    },
+  });
+
+  // Keep quote-to-shipment uniqueness stable across reseeds.
+  await prisma.shipment.updateMany({
+    where: {
+      companyId: company.id,
+      quoteId: "quote_2026_0001",
+    },
+    data: {
+      quoteId: null,
     },
   });
 
@@ -642,6 +692,7 @@ async function main() {
       uploadedById: adminUser.id,
       version: 1,
       status: "VERIFIED",
+      isClientVisible: true,
       notes: "Original airway bill verified by operations.",
     },
   });
@@ -659,6 +710,7 @@ async function main() {
       uploadedById: adminUser.id,
       version: 2,
       status: "RECEIVED",
+      isClientVisible: true,
       notes: "Customer re-uploaded corrected values in version 2.",
     },
   });
@@ -676,6 +728,7 @@ async function main() {
       uploadedById: adminUser.id,
       version: 1,
       status: "PENDING",
+      isClientVisible: false,
       notes: "Pending final signature from shipper.",
     },
   });
@@ -878,6 +931,8 @@ async function main() {
   console.log("Seed completed.");
   console.log("Admin user:", adminUser.email);
   console.log("Admin password: Admin123!");
+  console.log("Portal user:", portalUser.email);
+  console.log("Portal password: Client123!");
 }
 
 main()
