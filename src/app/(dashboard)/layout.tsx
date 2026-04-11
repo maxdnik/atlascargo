@@ -85,79 +85,65 @@ export default async function DashboardLayout({
     visibleModules.has(PermissionResource.REVENUE) ||
     visibleModules.has(PermissionResource.EXPENSES)
   ) {
+    const financeChildren: NonNullable<SidebarNavItem["children"]> = [];
+    if (visibleModules.has(PermissionResource.REVENUE)) {
+      financeChildren.push({
+        id: "invoices",
+        href: "/finance/invoices",
+        label: "Invoices",
+        match: "prefix",
+      });
+    }
+    if (visibleModules.has(PermissionResource.EXPENSES)) {
+      financeChildren.push({
+        id: "general-expenses",
+        href: "/finance/expenses",
+        label: "General Expenses",
+        match: "prefix",
+      });
+    }
+    if (visibleModules.has(PermissionResource.REVENUE)) {
+      financeChildren.push({
+        id: "finance-ar",
+        href: "/finance/ar",
+        label: "Accounts Receivable",
+        match: "prefix",
+      });
+    }
+    if (visibleModules.has(PermissionResource.EXPENSES)) {
+      financeChildren.push({
+        id: "finance-ap",
+        href: "/finance/ap",
+        label: "Accounts Payable",
+        match: "prefix",
+      });
+    }
+    if (
+      visibleModules.has(PermissionResource.REVENUE) &&
+      visibleModules.has(PermissionResource.EXPENSES)
+    ) {
+      financeChildren.push({
+        id: "finance-profitability",
+        href: "/finance/profitability",
+        label: "Shipment Profitability",
+        match: "prefix",
+      });
+    }
+    financeChildren.push({
+      id: "finance-forecast",
+      href: "/finance/forecast",
+      label: "Cash Forecast",
+      match: "prefix",
+    });
+
     navItems.push({
       id: "finance",
       href: "/finance",
       label: "Finance",
       icon: "finance",
       section: "finance",
-      match: "exact",
-    });
-  }
-  if (visibleModules.has(PermissionResource.REVENUE)) {
-    navItems.push({
-      id: "invoices",
-      href: "/finance/invoices",
-      label: "Invoices",
-      icon: "finance",
-      section: "finance",
       match: "prefix",
-    });
-  }
-  if (visibleModules.has(PermissionResource.EXPENSES)) {
-    navItems.push({
-      id: "general-expenses",
-      href: "/finance/expenses",
-      label: "General Expenses",
-      icon: "finance",
-      section: "finance",
-      match: "prefix",
-    });
-  }
-  if (visibleModules.has(PermissionResource.REVENUE)) {
-    navItems.push({
-      id: "finance-ar",
-      href: "/finance/ar",
-      label: "Accounts Receivable",
-      icon: "finance",
-      section: "finance",
-      match: "prefix",
-    });
-  }
-  if (visibleModules.has(PermissionResource.EXPENSES)) {
-    navItems.push({
-      id: "finance-ap",
-      href: "/finance/ap",
-      label: "Accounts Payable",
-      icon: "finance",
-      section: "finance",
-      match: "prefix",
-    });
-  }
-  if (
-    visibleModules.has(PermissionResource.REVENUE) &&
-    visibleModules.has(PermissionResource.EXPENSES)
-  ) {
-    navItems.push({
-      id: "finance-profitability",
-      href: "/finance/profitability",
-      label: "Shipment Profitability",
-      icon: "finance",
-      section: "finance",
-      match: "prefix",
-    });
-  }
-  if (
-    visibleModules.has(PermissionResource.REVENUE) ||
-    visibleModules.has(PermissionResource.EXPENSES)
-  ) {
-    navItems.push({
-      id: "finance-forecast",
-      href: "/finance/forecast",
-      label: "Cash Forecast",
-      icon: "finance",
-      section: "finance",
-      match: "prefix",
+      children: financeChildren,
     });
   }
   if (visibleModules.has(PermissionResource.ADMIN)) {
