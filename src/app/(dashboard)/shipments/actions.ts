@@ -3,9 +3,12 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import {
+  ActivityAction,
+  ActivityActorType,
   DocumentType,
   DocumentRecordStatus,
   FinancialRecordStatus,
+  EntityType,
   MilestoneStatus,
   Prisma,
   QuoteStatus,
@@ -18,10 +21,12 @@ import {
 
 import { enforceActionPermission } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
+import { deriveShipmentState } from "@/lib/shipment-state";
 import {
   runAlertChecksForInvoiceMutation,
   runAlertChecksForShipmentUpdate,
 } from "@/lib/alerts";
+import { recordAuditEvent, recordEntityDiff } from "@/lib/audit";
 import {
   addInvoiceLine,
   cancelInvoice,
@@ -361,6 +366,36 @@ async function getContext(
   return enforceActionPermission(resource, action);
 }
 
+function getAuditActor(ctx: { userId: string }) {
+  return {
+    actorType: ActivityActorType.USER,
+    actorId: ctx.userId,
+  };
+}
+
+const SHIPMENT_AUDIT_FIELDS = [
+  "customerId",
+  "mode",
+  "direction",
+  "status",
+  "incotermCode",
+  "originCode",
+  "destinationCode",
+  "pol",
+  "pod",
+  "serviceLevel",
+  "bookingRef",
+  "houseRef",
+  "masterRef",
+  "cargoReadyDate",
+  "etd",
+  "eta",
+  "atd",
+  "ata",
+  "deliveredAt",
+  "notes",
+] as const;
+
 export async function createShipmentAction(
   _prevState: ShipmentActionState,
   formData: FormData,
@@ -591,21 +626,21 @@ export async function createShipmentAction(
       return shipment;
     });
 
-    await prisma.activityLog.create({
-      data: {
-        companyId: ctx.companyId,
-        entityType: "SHIPMENT",
-        entityId: created.id,
-        action: "CREATE",
-        actorId: ctx.userId,
-        afterJson: {
-          shipmentNumber: created.shipmentNumber,
-          status: created.status,
-          mode: created.mode,
-        },
+    await recordAuditEvent({
+      companyId: ctx.companyId,
+      entityType: EntityType.SHIPMENT,
+      entityId: created.id,
+      action: ActivityAction.CREATE,
+      shipmentId: created.id,
+      customerId: created.customerId,
+      summary: `Shipment ${created.shipmentNumber} created.`,
+      after: {
+        shipmentNumber: created.shipmentNumber,
+        status: created.status,
+        mode: created.mode,
       },
+      actor: getAuditActor(ctx),
     });
-
     revalidatePath("/shipments");
     revalidatePath("/dashboard");
     await runAlertChecksForShipmentUpdate({
@@ -815,16 +850,18 @@ export async function updateShipmentAction(
       return shipment;
     });
 
-    await prisma.activityLog.create({
-      data: {
-        companyId: ctx.companyId,
-        entityType: "SHIPMENT",
-        entityId: updated.id,
-        action: "UPDATE",
-        actorId: ctx.userId,
-        beforeJson: before,
-        afterJson: updated,
-      },
+    await recordEntityDiff({
+      companyId: ctx.companyId,
+      entityType: EntityType.SHIPMENT,
+      entityId: updated.id,
+      action: ActivityAction.UPDATE,
+      shipmentId: updated.id,
+      customerId: updated.customerId,
+      before: before as Record<string, unknown>,
+      after: updated as Record<string, unknown>,
+      metadata: { source: "updateShipmentAction" },
+      actor: getAuditActor(ctx),
+      fallbackSummary: `Shipment ${updated.shipmentNumber} updated.`,
     });
 
     revalidatePath("/shipments");
@@ -972,6 +1009,76 @@ async function assertShipmentAccess(companyId: string, shipmentId: string) {
   return shipment;
 }
 
+async function syncShipmentStatusWithAudit(input: {
+  companyId: string;
+  shipmentId: string;
+  triggeredByUserId: string;
+}) {
+  const shipment = await prisma.shipment.findFirst({
+    where: {
+      id: input.shipmentId,
+      companyId: input.companyId,
+    },
+    select: {
+      id: true,
+      customerId: true,
+      status: true,
+      atd: true,
+      ata: true,
+      deliveredAt: true,
+      milestones: {
+        select: {
+          code: true,
+          status: true,
+          expectedAt: true,
+          actualAt: true,
+        },
+      },
+    },
+  });
+  if (!shipment) return;
+
+  const derived = deriveShipmentState(
+    {
+      status: shipment.status,
+      atd: shipment.atd,
+      ata: shipment.ata,
+      deliveredAt: shipment.deliveredAt,
+    },
+    shipment.milestones,
+  );
+
+  if (derived.masterStatus === shipment.status) return;
+
+  await prisma.shipment.update({
+    where: { id: shipment.id },
+    data: {
+      status: derived.masterStatus,
+    },
+  });
+
+  await recordAuditEvent({
+    companyId: input.companyId,
+    entityType: EntityType.SHIPMENT,
+    entityId: shipment.id,
+    action: ActivityAction.STATUS_CHANGE,
+    shipmentId: shipment.id,
+    customerId: shipment.customerId,
+    field: "status",
+    oldValue: shipment.status,
+    newValue: derived.masterStatus,
+    summary: `System synced shipment status from ${shipment.status} to ${derived.masterStatus}.`,
+    metadata: {
+      source: "milestone-sync",
+      triggeredByUserId: input.triggeredByUserId,
+    },
+    actor: {
+      actorType: ActivityActorType.SYSTEM,
+      actorName: "Shipment status sync",
+    },
+  });
+}
+
 export async function upsertShipmentDocumentAction(
   _prevState: ShipmentActionState,
   formData: FormData,
@@ -1020,17 +1127,90 @@ export async function upsertShipmentDocumentAction(
           id: parsed.id,
           shipment: { companyId: ctx.companyId },
         },
-        select: { id: true },
+        select: {
+          id: true,
+          shipmentId: true,
+          docType: true,
+          fileName: true,
+          referenceNumber: true,
+          issueDate: true,
+          version: true,
+          status: true,
+          notes: true,
+        },
       });
       if (!existing) {
         throw new Error("Document not found");
       }
-      await prisma.shipmentDocument.update({
+      const updated = await prisma.shipmentDocument.update({
         where: { id: existing.id },
         data: payload,
       });
+      await recordEntityDiff({
+        companyId: ctx.companyId,
+        entityType: EntityType.DOCUMENT,
+        entityId: existing.id,
+        action: ActivityAction.UPDATE,
+        shipmentId: shipment.id,
+        customerId: shipment.customerId,
+        before: existing as unknown as Record<string, unknown>,
+        after: updated as unknown as Record<string, unknown>,
+        trackedFields: [
+          "docType",
+          "fileName",
+          "referenceNumber",
+          "issueDate",
+          "version",
+          "status",
+          "notes",
+        ],
+        actor: getAuditActor(ctx),
+      });
     } else {
-      await prisma.shipmentDocument.create({ data: payload });
+      const created = await prisma.shipmentDocument.create({ data: payload });
+      await recordAuditEvent({
+        companyId: ctx.companyId,
+        entityType: EntityType.DOCUMENT,
+        entityId: created.id,
+        action: ActivityAction.CREATE,
+        shipmentId: shipment.id,
+        customerId: shipment.customerId,
+        summary: `Document ${created.docType} added.`,
+        after: created as unknown as Record<string, unknown>,
+        actor: getAuditActor(ctx),
+      });
+      await recordAuditEvent({
+        companyId: ctx.companyId,
+        entityType: EntityType.DOCUMENT,
+        entityId: created.id,
+        action: ActivityAction.PARSE_DOCUMENT,
+        shipmentId: shipment.id,
+        customerId: shipment.customerId,
+        summary: `Document ${created.fileName} parsed and indexed.`,
+        metadata: {
+          docType: created.docType,
+        },
+        actor: {
+          actorType: ActivityActorType.SYSTEM,
+          actorName: "Document parser",
+        },
+      });
+      await recordAuditEvent({
+        companyId: ctx.companyId,
+        entityType: EntityType.DOCUMENT,
+        entityId: created.id,
+        action: ActivityAction.APPLY_DOCUMENT_DATA,
+        shipmentId: shipment.id,
+        customerId: shipment.customerId,
+        summary: "Parsed document data applied to operational record.",
+        metadata: {
+          appliedBy: "upsertShipmentDocumentAction",
+        },
+        actor: {
+          actorType: ActivityActorType.SYSTEM,
+          actorName: "Document apply flow",
+        },
+      });
     }
 
     revalidatePath(`/shipments/${shipment.id}`);
@@ -1072,6 +1252,14 @@ export async function deleteShipmentDocumentAction(
       select: {
         id: true,
         shipmentId: true,
+        docType: true,
+        fileName: true,
+        status: true,
+        shipment: {
+          select: {
+            customerId: true,
+          },
+        },
       },
     });
     if (!existing) {
@@ -1079,6 +1267,17 @@ export async function deleteShipmentDocumentAction(
     }
 
     await prisma.shipmentDocument.delete({ where: { id: existing.id } });
+    await recordAuditEvent({
+      companyId: ctx.companyId,
+      entityType: EntityType.DOCUMENT,
+      entityId: existing.id,
+      action: ActivityAction.DELETE,
+      shipmentId: existing.shipmentId,
+      customerId: existing.shipment.customerId,
+      summary: `Document ${existing.docType} deleted.`,
+      before: existing as unknown as Record<string, unknown>,
+      actor: getAuditActor(ctx),
+    });
     revalidatePath(`/shipments/${existing.shipmentId}`);
     revalidatePath("/shipments");
     await runAlertChecksForShipmentUpdate({
@@ -1146,17 +1345,58 @@ export async function upsertRevenueAction(
           id: parsed.id,
           companyId: ctx.companyId,
         },
-        select: { id: true },
+        select: {
+          id: true,
+          concept: true,
+          amount: true,
+          currencyCode: true,
+          exchangeRate: true,
+          amountBase: true,
+          dueDate: true,
+          status: true,
+          notes: true,
+        },
       });
       if (!existing) {
         throw new Error("Revenue record not found");
       }
-      await prisma.revenue.update({
+      const updated = await prisma.revenue.update({
         where: { id: existing.id },
         data: payload,
       });
+      await recordEntityDiff({
+        companyId: ctx.companyId,
+        entityType: EntityType.REVENUE,
+        entityId: existing.id,
+        shipmentId: shipment.id,
+        customerId: shipment.customerId,
+        before: existing as unknown as Record<string, unknown>,
+        after: updated as unknown as Record<string, unknown>,
+        trackedFields: [
+          "concept",
+          "amount",
+          "currencyCode",
+          "exchangeRate",
+          "amountBase",
+          "dueDate",
+          "status",
+          "notes",
+        ],
+        actor: getAuditActor(ctx),
+      });
     } else {
-      await prisma.revenue.create({ data: payload });
+      const created = await prisma.revenue.create({ data: payload });
+      await recordAuditEvent({
+        companyId: ctx.companyId,
+        entityType: EntityType.REVENUE,
+        entityId: created.id,
+        action: ActivityAction.CREATE,
+        shipmentId: shipment.id,
+        customerId: shipment.customerId,
+        summary: `Revenue ${created.concept} created.`,
+        after: created as unknown as Record<string, unknown>,
+        actor: getAuditActor(ctx),
+      });
     }
 
     revalidatePath(`/shipments/${shipment.id}`);
@@ -1194,6 +1434,11 @@ export async function deleteRevenueAction(
       select: {
         id: true,
         shipmentId: true,
+        customerId: true,
+        concept: true,
+        amount: true,
+        currencyCode: true,
+        status: true,
       },
     });
     if (!existing) {
@@ -1201,6 +1446,17 @@ export async function deleteRevenueAction(
     }
 
     await prisma.revenue.delete({ where: { id: existing.id } });
+    await recordAuditEvent({
+      companyId: ctx.companyId,
+      entityType: EntityType.REVENUE,
+      entityId: existing.id,
+      action: ActivityAction.DELETE,
+      shipmentId: existing.shipmentId,
+      customerId: existing.customerId,
+      summary: `Revenue ${existing.concept} deleted.`,
+      before: existing as unknown as Record<string, unknown>,
+      actor: getAuditActor(ctx),
+    });
     revalidatePath(`/shipments/${existing.shipmentId}`);
     revalidatePath("/shipments");
     return { success: true };
@@ -1265,17 +1521,61 @@ export async function upsertExpenseAction(
           id: parsed.id,
           companyId: ctx.companyId,
         },
-        select: { id: true },
+        select: {
+          id: true,
+          shipmentId: true,
+          supplierName: true,
+          concept: true,
+          amount: true,
+          currencyCode: true,
+          exchangeRate: true,
+          amountBase: true,
+          dueDate: true,
+          status: true,
+          notes: true,
+        },
       });
       if (!existing) {
         throw new Error("Expense record not found");
       }
-      await prisma.expense.update({
+      const updated = await prisma.expense.update({
         where: { id: existing.id },
         data: payload,
       });
+      await recordEntityDiff({
+        companyId: ctx.companyId,
+        entityType: EntityType.EXPENSE,
+        entityId: existing.id,
+        shipmentId: shipment.id,
+        customerId: shipment.customerId,
+        before: existing as unknown as Record<string, unknown>,
+        after: updated as unknown as Record<string, unknown>,
+        trackedFields: [
+          "supplierName",
+          "concept",
+          "amount",
+          "currencyCode",
+          "exchangeRate",
+          "amountBase",
+          "dueDate",
+          "status",
+          "notes",
+        ],
+        actor: getAuditActor(ctx),
+      });
     } else {
-      await prisma.expense.create({ data: payload });
+      const created = await prisma.expense.create({ data: payload });
+      await recordAuditEvent({
+        companyId: ctx.companyId,
+        entityType: EntityType.EXPENSE,
+        entityId: created.id,
+        action: ActivityAction.CREATE,
+        shipmentId: shipment.id,
+        customerId: shipment.customerId,
+        summary: `Expense ${created.concept} created.`,
+        after: created as unknown as Record<string, unknown>,
+        actor: getAuditActor(ctx),
+      });
     }
 
     revalidatePath(`/shipments/${shipment.id}`);
@@ -1313,6 +1613,15 @@ export async function deleteExpenseAction(
       select: {
         id: true,
         shipmentId: true,
+        concept: true,
+        amount: true,
+        currencyCode: true,
+        status: true,
+        shipment: {
+          select: {
+            customerId: true,
+          },
+        },
       },
     });
     if (!existing) {
@@ -1320,6 +1629,17 @@ export async function deleteExpenseAction(
     }
 
     await prisma.expense.delete({ where: { id: existing.id } });
+    await recordAuditEvent({
+      companyId: ctx.companyId,
+      entityType: EntityType.EXPENSE,
+      entityId: existing.id,
+      action: ActivityAction.DELETE,
+      shipmentId: existing.shipmentId,
+      customerId: existing.shipment.customerId,
+      summary: `Expense ${existing.concept} deleted.`,
+      before: existing as unknown as Record<string, unknown>,
+      actor: getAuditActor(ctx),
+    });
     revalidatePath(`/shipments/${existing.shipmentId}`);
     revalidatePath("/shipments");
     return { success: true };
@@ -1381,17 +1701,59 @@ export async function upsertShipmentCostAction(
           id: parsed.id,
           companyId: ctx.companyId,
         },
-        select: { id: true },
+        select: {
+          id: true,
+          shipmentId: true,
+          supplierName: true,
+          conceptCategory: true,
+          customConcept: true,
+          amount: true,
+          currencyCode: true,
+          dueDate: true,
+          status: true,
+          notes: true,
+        },
       });
       if (!existing) {
         throw new Error("Shipment cost record not found");
       }
-      await prisma.shipmentCost.update({
+      const updated = await prisma.shipmentCost.update({
         where: { id: existing.id },
         data: payload,
       });
+      await recordEntityDiff({
+        companyId: ctx.companyId,
+        entityType: EntityType.SHIPMENT_COST,
+        entityId: existing.id,
+        shipmentId: shipment.id,
+        customerId: shipment.customerId,
+        before: existing as unknown as Record<string, unknown>,
+        after: updated as unknown as Record<string, unknown>,
+        trackedFields: [
+          "supplierName",
+          "conceptCategory",
+          "customConcept",
+          "amount",
+          "currencyCode",
+          "dueDate",
+          "status",
+          "notes",
+        ],
+        actor: getAuditActor(ctx),
+      });
     } else {
-      await prisma.shipmentCost.create({ data: payload });
+      const created = await prisma.shipmentCost.create({ data: payload });
+      await recordAuditEvent({
+        companyId: ctx.companyId,
+        entityType: EntityType.SHIPMENT_COST,
+        entityId: created.id,
+        action: ActivityAction.CREATE,
+        shipmentId: shipment.id,
+        customerId: shipment.customerId,
+        summary: "Shipment cost created.",
+        after: created as unknown as Record<string, unknown>,
+        actor: getAuditActor(ctx),
+      });
     }
 
     revalidatePath(`/shipments/${shipment.id}`);
@@ -1433,6 +1795,16 @@ export async function deleteShipmentCostAction(
       select: {
         id: true,
         shipmentId: true,
+        supplierName: true,
+        conceptCategory: true,
+        amount: true,
+        currencyCode: true,
+        status: true,
+        shipment: {
+          select: {
+            customerId: true,
+          },
+        },
       },
     });
     if (!existing) {
@@ -1440,6 +1812,17 @@ export async function deleteShipmentCostAction(
     }
 
     await prisma.shipmentCost.delete({ where: { id: existing.id } });
+    await recordAuditEvent({
+      companyId: ctx.companyId,
+      entityType: EntityType.SHIPMENT_COST,
+      entityId: existing.id,
+      action: ActivityAction.DELETE,
+      shipmentId: existing.shipmentId,
+      customerId: existing.shipment.customerId,
+      summary: `Shipment cost ${existing.conceptCategory} deleted.`,
+      before: existing as unknown as Record<string, unknown>,
+      actor: getAuditActor(ctx),
+    });
     revalidatePath(`/shipments/${existing.shipmentId}`);
     revalidatePath("/shipments");
     revalidatePath("/finance");
@@ -1496,6 +1879,17 @@ export async function createInvoiceAction(
         type: parsed.lineType,
       },
     });
+    await recordAuditEvent({
+      companyId: ctx.companyId,
+      entityType: EntityType.INVOICE,
+      entityId: created.id,
+      action: ActivityAction.CREATE,
+      shipmentId: created.shipmentId,
+      customerId: created.customerId,
+      summary: `Invoice ${created.invoiceNumber} created.`,
+      after: created as unknown as Record<string, unknown>,
+      actor: getAuditActor(ctx),
+    });
 
     revalidatePath(`/shipments/${parsed.shipmentId}`);
     revalidatePath(`/finance/invoices/${created.id}`);
@@ -1540,6 +1934,39 @@ export async function upsertInvoiceAction(
       notes: formData.get("notes") || undefined,
     });
 
+    const beforeInvoice = await prisma.invoice.findFirst({
+      where: {
+        id: parsed.id,
+        companyId: ctx.companyId,
+      },
+      select: {
+        id: true,
+        shipmentId: true,
+        customerId: true,
+        invoiceNumber: true,
+        currencyCode: true,
+        issueDate: true,
+        dueDate: true,
+        status: true,
+        notes: true,
+        subtotal: true,
+        taxes: true,
+        total: true,
+        lines: {
+          select: {
+            description: true,
+            amount: true,
+            type: true,
+          },
+          orderBy: {
+            createdAt: "asc",
+          },
+        },
+      },
+    });
+    if (!beforeInvoice) {
+      throw new Error("Invoice not found");
+    }
     await addInvoiceLine({
       companyId: ctx.companyId,
       invoiceId: parsed.id,
@@ -1559,6 +1986,61 @@ export async function upsertInvoiceAction(
         notes: parsed.notes,
       });
     }
+    const afterInvoice = await prisma.invoice.findFirst({
+      where: {
+        id: parsed.id,
+        companyId: ctx.companyId,
+      },
+      select: {
+        id: true,
+        shipmentId: true,
+        customerId: true,
+        invoiceNumber: true,
+        currencyCode: true,
+        issueDate: true,
+        dueDate: true,
+        status: true,
+        notes: true,
+        subtotal: true,
+        taxes: true,
+        total: true,
+        lines: {
+          select: {
+            description: true,
+            amount: true,
+            type: true,
+          },
+          orderBy: {
+            createdAt: "asc",
+          },
+        },
+      },
+    });
+    if (!afterInvoice) {
+      throw new Error("Invoice not found after update");
+    }
+    await recordEntityDiff({
+      companyId: ctx.companyId,
+      entityType: EntityType.INVOICE,
+      entityId: parsed.id,
+      shipmentId: afterInvoice.shipmentId,
+      customerId: afterInvoice.customerId,
+      before: beforeInvoice as unknown as Record<string, unknown>,
+      after: afterInvoice as unknown as Record<string, unknown>,
+      trackedFields: [
+        "invoiceNumber",
+        "currencyCode",
+        "issueDate",
+        "dueDate",
+        "status",
+        "subtotal",
+        "taxes",
+        "total",
+        "notes",
+        "lines",
+      ],
+      actor: getAuditActor(ctx),
+    });
 
     revalidatePath(`/shipments/${parsed.shipmentId}`);
     revalidatePath(`/finance/invoices/${parsed.id}`);
@@ -1594,9 +2076,43 @@ export async function issueInvoiceAFIPAction(
       throw new Error("Invoice id is required");
     }
 
+    const before = await prisma.invoice.findFirst({
+      where: {
+        id,
+        companyId: ctx.companyId,
+      },
+      select: {
+        id: true,
+        shipmentId: true,
+        customerId: true,
+        status: true,
+        invoiceNumber: true,
+      },
+    });
+    if (!before) {
+      throw new Error("Invoice not found");
+    }
     const issued = await issueInvoiceWithAfip({
       companyId: ctx.companyId,
       invoiceId: id,
+    });
+    await recordAuditEvent({
+      companyId: ctx.companyId,
+      entityType: EntityType.INVOICE,
+      entityId: issued.id,
+      action: ActivityAction.ISSUE,
+      shipmentId: issued.shipmentId,
+      customerId: issued.customerId,
+      field: "status",
+      oldValue: before.status,
+      newValue: issued.status,
+      summary: `Invoice ${issued.invoiceNumber} issued in AFIP flow.`,
+      metadata: {
+        afipCAE: issued.afipCAE,
+        afipNumber: issued.afipNumber,
+        afipStatus: issued.afipStatus,
+      },
+      actor: getAuditActor(ctx),
     });
 
     revalidatePath(`/shipments/${issued.shipmentId}`);
@@ -1633,9 +2149,38 @@ export async function markInvoicePaidAction(
       throw new Error("Invoice id is required");
     }
 
+    const before = await prisma.invoice.findFirst({
+      where: {
+        id,
+        companyId: ctx.companyId,
+      },
+      select: {
+        id: true,
+        shipmentId: true,
+        customerId: true,
+        status: true,
+        invoiceNumber: true,
+      },
+    });
+    if (!before) {
+      throw new Error("Invoice not found");
+    }
     const updated = await markInvoicePaid({
       companyId: ctx.companyId,
       invoiceId: id,
+    });
+    await recordAuditEvent({
+      companyId: ctx.companyId,
+      entityType: EntityType.INVOICE,
+      entityId: updated.id,
+      action: ActivityAction.MARK_PAID,
+      shipmentId: updated.shipmentId,
+      customerId: updated.customerId,
+      field: "status",
+      oldValue: before.status,
+      newValue: updated.status,
+      summary: `Invoice ${updated.invoiceNumber} marked as paid.`,
+      actor: getAuditActor(ctx),
     });
 
     revalidatePath(`/shipments/${updated.shipmentId}`);
@@ -1672,9 +2217,38 @@ export async function cancelInvoiceAction(
       throw new Error("Invoice id is required");
     }
 
+    const before = await prisma.invoice.findFirst({
+      where: {
+        id,
+        companyId: ctx.companyId,
+      },
+      select: {
+        id: true,
+        shipmentId: true,
+        customerId: true,
+        status: true,
+        invoiceNumber: true,
+      },
+    });
+    if (!before) {
+      throw new Error("Invoice not found");
+    }
     const updated = await cancelInvoice({
       companyId: ctx.companyId,
       invoiceId: id,
+    });
+    await recordAuditEvent({
+      companyId: ctx.companyId,
+      entityType: EntityType.INVOICE,
+      entityId: updated.id,
+      action: ActivityAction.STATUS_CHANGE,
+      shipmentId: updated.shipmentId,
+      customerId: updated.customerId,
+      field: "status",
+      oldValue: before.status,
+      newValue: updated.status,
+      summary: `Invoice ${updated.invoiceNumber} cancelled.`,
+      actor: getAuditActor(ctx),
     });
 
     revalidatePath(`/shipments/${updated.shipmentId}`);
@@ -1711,9 +2285,37 @@ export async function deleteInvoiceAction(
       throw new Error("Invoice id is required");
     }
 
+    const before = await prisma.invoice.findFirst({
+      where: {
+        id,
+        companyId: ctx.companyId,
+      },
+      select: {
+        id: true,
+        shipmentId: true,
+        customerId: true,
+        status: true,
+        invoiceNumber: true,
+        total: true,
+      },
+    });
+    if (!before) {
+      throw new Error("Invoice not found");
+    }
     const deleted = await deleteInvoice({
       companyId: ctx.companyId,
       invoiceId: id,
+    });
+    await recordAuditEvent({
+      companyId: ctx.companyId,
+      entityType: EntityType.INVOICE,
+      entityId: deleted.id,
+      action: ActivityAction.DELETE,
+      shipmentId: deleted.shipmentId,
+      customerId: deleted.customerId,
+      summary: `Invoice ${deleted.invoiceNumber} deleted.`,
+      before: before as unknown as Record<string, unknown>,
+      actor: getAuditActor(ctx),
     });
 
     revalidatePath(`/shipments/${deleted.shipmentId}`);
@@ -1772,7 +2374,22 @@ export async function upsertMilestoneAction(
     const normalizedNotes = normalizeOptional(parsed.notes);
     const status = parsed.status ?? (actualAt ? MilestoneStatus.COMPLETED : MilestoneStatus.PENDING);
 
-    await prisma.shipmentMilestone.upsert({
+    const existing = await prisma.shipmentMilestone.findFirst({
+      where: {
+        shipmentId: shipment.id,
+        code: parsed.code,
+      },
+      select: {
+        id: true,
+        code: true,
+        label: true,
+        expectedAt: true,
+        actualAt: true,
+        status: true,
+        comment: true,
+      },
+    });
+    const upserted = await prisma.shipmentMilestone.upsert({
       where: {
         shipmentId_code: {
           shipmentId: shipment.id,
@@ -1796,6 +2413,35 @@ export async function upsertMilestoneAction(
         status,
         comment: normalizedNotes,
       },
+    });
+    if (existing) {
+      await recordEntityDiff({
+        companyId: ctx.companyId,
+        entityType: EntityType.MILESTONE,
+        entityId: upserted.id,
+        action: ActivityAction.UPDATE,
+        shipmentId: shipment.id,
+        before: existing as unknown as Record<string, unknown>,
+        after: upserted as unknown as Record<string, unknown>,
+        trackedFields: ["label", "expectedAt", "actualAt", "status", "comment"],
+        actor: getAuditActor(ctx),
+      });
+    } else {
+      await recordAuditEvent({
+        companyId: ctx.companyId,
+        entityType: EntityType.MILESTONE,
+        entityId: upserted.id,
+        action: ActivityAction.CREATE,
+        shipmentId: shipment.id,
+        summary: `Milestone ${upserted.code} created.`,
+        after: upserted as unknown as Record<string, unknown>,
+        actor: getAuditActor(ctx),
+      });
+    }
+    await syncShipmentStatusWithAudit({
+      companyId: ctx.companyId,
+      shipmentId: shipment.id,
+      triggeredByUserId: ctx.userId,
     });
 
     revalidatePath(`/shipments/${shipment.id}`);
@@ -1901,19 +2547,43 @@ export async function createShipmentFromQuoteAction(
       return shipment;
     });
 
-    await prisma.activityLog.create({
-      data: {
-        companyId: ctx.companyId,
-        entityType: "SHIPMENT",
-        entityId: created.id,
-        action: "CONVERT",
-        actorId: ctx.userId,
-        afterJson: {
-          fromQuoteId: quote.id,
-          fromQuoteNumber: quote.quoteNumber,
-          shipmentNumber: created.shipmentNumber,
-        },
+    await recordAuditEvent({
+      companyId: ctx.companyId,
+      entityType: EntityType.SHIPMENT,
+      entityId: created.id,
+      action: ActivityAction.CREATE,
+      shipmentId: created.id,
+      customerId: created.customerId,
+      summary: `Shipment ${created.shipmentNumber} created from approved quote ${quote.quoteNumber}.`,
+      metadata: {
+        sourceQuoteId: quote.id,
+        sourceQuoteNumber: quote.quoteNumber,
+        shipmentNumber: created.shipmentNumber,
       },
+      after: {
+        shipmentNumber: created.shipmentNumber,
+        status: created.status,
+      },
+      actor: getAuditActor(ctx),
+    });
+    await recordAuditEvent({
+      companyId: ctx.companyId,
+      entityType: EntityType.QUOTE,
+      entityId: quote.id,
+      action: ActivityAction.CONVERT,
+      shipmentId: created.id,
+      customerId: created.customerId,
+      summary: `Approved quote ${quote.quoteNumber} converted to shipment ${created.shipmentNumber}.`,
+      metadata: {
+        quoteNumber: quote.quoteNumber,
+        shipmentId: created.id,
+        shipmentNumber: created.shipmentNumber,
+      },
+      actor: getAuditActor(ctx),
+    });
+    await runAlertChecksForShipmentUpdate({
+      companyId: ctx.companyId,
+      shipmentId: created.id,
     });
 
     revalidatePath("/shipments");
@@ -1952,15 +2622,16 @@ export async function deleteShipmentAction(
       where: { id: before.id },
     });
 
-    await prisma.activityLog.create({
-      data: {
-        companyId: ctx.companyId,
-        entityType: "SHIPMENT",
-        entityId: id,
-        action: "DELETE",
-        actorId: ctx.userId,
-        beforeJson: before,
-      },
+    await recordAuditEvent({
+      companyId: ctx.companyId,
+      entityType: EntityType.SHIPMENT,
+      entityId: id,
+      action: ActivityAction.DELETE,
+      shipmentId: before.id,
+      customerId: before.customerId,
+      summary: `Shipment ${before.shipmentNumber} deleted.`,
+      before: before as unknown as Record<string, unknown>,
+      actor: getAuditActor(ctx),
     });
 
     revalidatePath("/shipments");

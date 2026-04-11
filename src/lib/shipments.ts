@@ -150,6 +150,17 @@ export async function getShipmentById(companyId: string, id: string) {
   });
 }
 
+export async function getShipmentRef(companyId: string, id: string) {
+  return prisma.shipment.findFirst({
+    where: { id, companyId },
+    select: {
+      id: true,
+      shipmentNumber: true,
+      customerId: true,
+    },
+  });
+}
+
 export async function deleteShipmentById(companyId: string, id: string) {
   const existing = await prisma.shipment.findFirst({
     where: { id, companyId },

@@ -240,6 +240,13 @@ enum ActivityAction {
   CREATE
   UPDATE
   DELETE
+  STATUS_CHANGE
+  ISSUE
+  MARK_PAID
+  PARSE_DOCUMENT
+  APPLY_DOCUMENT_DATA
+  RESOLVE
+  REOPEN
   CONVERT
   APPROVE
   LOGIN
@@ -254,9 +261,17 @@ enum EntityType {
   DOCUMENT
   REVENUE
   EXPENSE
+  SHIPMENT_COST
+  INVOICE
   TASK
   USER
   SETTINGS
+  ALERT
+}
+
+enum ActivityActorType {
+  USER
+  SYSTEM
 }
 
 model Company {
@@ -1088,6 +1103,15 @@ model ActivityLog {
   entityType EntityType
   entityId   String
   action     ActivityAction
+  actorType  ActivityActorType @default(USER)
+  actorName  String?
+  shipmentId String?
+  customerId String?
+  field      String?
+  oldValue   String?
+  newValue   String?
+  summary    String?
+  metadata   Json?
   beforeJson Json?
   afterJson  Json?
   actorId    String?
@@ -1100,6 +1124,9 @@ model ActivityLog {
 
   @@index([entityType, entityId, createdAt])
   @@index([companyId, createdAt])
+  @@index([companyId, entityType, entityId, createdAt])
+  @@index([companyId, shipmentId, createdAt])
+  @@index([companyId, customerId, createdAt])
 }
 
 model Notification {

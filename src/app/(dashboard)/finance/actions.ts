@@ -2,6 +2,9 @@
 
 import { revalidatePath } from "next/cache";
 import {
+  ActivityAction,
+  ActivityActorType,
+  EntityType,
   GeneralExpenseCategory,
   GeneralExpenseStatus,
   InvoiceLineType,
@@ -11,6 +14,7 @@ import { z } from "zod";
 import { enforceActionPermission } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { runAlertChecksForInvoiceMutation } from "@/lib/alerts";
+import { recordAuditEvent, recordEntityDiff } from "@/lib/audit";
 import {
   addInvoiceLine,
   cancelInvoice,
@@ -91,6 +95,13 @@ function calculateTaxes(subtotal: number) {
   return Math.round(subtotal * 0.21 * 100) / 100;
 }
 
+function getAuditActor(ctx: { userId: string }) {
+  return {
+    actorType: ActivityActorType.USER,
+    actorId: ctx.userId,
+  };
+}
+
 export async function createFinanceInvoiceAction(
   _prevState: FinanceActionState,
   formData: FormData,
@@ -118,6 +129,17 @@ export async function createFinanceInvoiceAction(
       notes: parsedHeader.notes,
       firstLine: lines[0],
     });
+    await recordAuditEvent({
+      companyId: ctx.companyId,
+      entityType: EntityType.INVOICE,
+      entityId: created.id,
+      action: ActivityAction.CREATE,
+      shipmentId: created.shipmentId,
+      customerId: created.customerId,
+      summary: `Invoice ${created.invoiceNumber} created.`,
+      after: created as unknown as Record<string, unknown>,
+      actor: getAuditActor(ctx),
+    });
 
     for (const line of lines.slice(1)) {
       await addInvoiceLine({
@@ -137,6 +159,68 @@ export async function createFinanceInvoiceAction(
       issueDate: parsedHeader.issueDate,
       dueDate: parsedHeader.dueDate,
       notes: parsedHeader.notes,
+    });
+    const afterInvoice = await prisma.invoice.findFirst({
+      where: {
+        id: created.id,
+        companyId: ctx.companyId,
+      },
+      select: {
+        id: true,
+        shipmentId: true,
+        customerId: true,
+        invoiceNumber: true,
+        currencyCode: true,
+        issueDate: true,
+        dueDate: true,
+        status: true,
+        notes: true,
+        subtotal: true,
+        taxes: true,
+        total: true,
+        lines: {
+          select: {
+            description: true,
+            amount: true,
+            type: true,
+          },
+          orderBy: {
+            createdAt: "asc",
+          },
+        },
+      },
+    });
+    if (!afterInvoice) {
+      throw new Error("Invoice not found after creation");
+    }
+    await recordEntityDiff({
+      companyId: ctx.companyId,
+      entityType: EntityType.INVOICE,
+      entityId: created.id,
+      shipmentId: created.shipmentId,
+      customerId: created.customerId,
+      before: {
+        invoiceNumber: created.invoiceNumber,
+        status: created.status,
+        subtotal: created.subtotal,
+        taxes: created.taxes,
+        total: created.total,
+      },
+      after: afterInvoice as unknown as Record<string, unknown>,
+      trackedFields: [
+        "invoiceNumber",
+        "currencyCode",
+        "issueDate",
+        "dueDate",
+        "status",
+        "subtotal",
+        "taxes",
+        "total",
+        "notes",
+        "lines",
+      ],
+      actor: getAuditActor(ctx),
+      fallbackSummary: `Invoice ${created.invoiceNumber} initialized.`,
     });
 
     revalidatePath("/finance");
@@ -178,6 +262,40 @@ export async function updateFinanceInvoiceAction(
       notes: formData.get("notes") || undefined,
     });
     const lines = parseInvoiceLines(formData);
+
+    const beforeInvoice = await prisma.invoice.findFirst({
+      where: {
+        id: invoiceId,
+        companyId: ctx.companyId,
+      },
+      select: {
+        id: true,
+        shipmentId: true,
+        customerId: true,
+        invoiceNumber: true,
+        currencyCode: true,
+        issueDate: true,
+        dueDate: true,
+        status: true,
+        notes: true,
+        subtotal: true,
+        taxes: true,
+        total: true,
+        lines: {
+          select: {
+            description: true,
+            amount: true,
+            type: true,
+          },
+          orderBy: {
+            createdAt: "asc",
+          },
+        },
+      },
+    });
+    if (!beforeInvoice) {
+      throw new Error("Invoice not found");
+    }
 
     await prisma.$transaction(async (tx) => {
       const existing = await tx.invoice.findFirst({
@@ -258,6 +376,61 @@ export async function updateFinanceInvoiceAction(
         },
       });
     });
+    const afterInvoice = await prisma.invoice.findFirst({
+      where: {
+        id: invoiceId,
+        companyId: ctx.companyId,
+      },
+      select: {
+        id: true,
+        shipmentId: true,
+        customerId: true,
+        invoiceNumber: true,
+        currencyCode: true,
+        issueDate: true,
+        dueDate: true,
+        status: true,
+        notes: true,
+        subtotal: true,
+        taxes: true,
+        total: true,
+        lines: {
+          select: {
+            description: true,
+            amount: true,
+            type: true,
+          },
+          orderBy: {
+            createdAt: "asc",
+          },
+        },
+      },
+    });
+    if (!afterInvoice) {
+      throw new Error("Invoice not found after update");
+    }
+    await recordEntityDiff({
+      companyId: ctx.companyId,
+      entityType: EntityType.INVOICE,
+      entityId: invoiceId,
+      shipmentId: afterInvoice.shipmentId,
+      customerId: afterInvoice.customerId,
+      before: beforeInvoice as unknown as Record<string, unknown>,
+      after: afterInvoice as unknown as Record<string, unknown>,
+      trackedFields: [
+        "invoiceNumber",
+        "currencyCode",
+        "issueDate",
+        "dueDate",
+        "status",
+        "subtotal",
+        "taxes",
+        "total",
+        "notes",
+        "lines",
+      ],
+      actor: getAuditActor(ctx),
+    });
 
     revalidatePath("/finance");
     revalidatePath("/finance/invoices");
@@ -319,10 +492,65 @@ async function mutateInvoiceStatus(
     if (!invoiceId) {
       throw new Error("Invoice id is required");
     }
+    const before = await prisma.invoice.findFirst({
+      where: {
+        id: invoiceId,
+        companyId: ctx.companyId,
+      },
+      select: {
+        id: true,
+        shipmentId: true,
+        customerId: true,
+        status: true,
+        invoiceNumber: true,
+      },
+    });
+    if (!before) {
+      throw new Error("Invoice not found");
+    }
     const updated = await mutation({
       companyId: ctx.companyId,
       invoiceId,
     });
+    const after = await prisma.invoice.findFirst({
+      where: {
+        id: updated.id,
+        companyId: ctx.companyId,
+      },
+      select: {
+        id: true,
+        shipmentId: true,
+        customerId: true,
+        status: true,
+        invoiceNumber: true,
+      },
+    });
+    if (!after) {
+      await recordAuditEvent({
+        companyId: ctx.companyId,
+        entityType: EntityType.INVOICE,
+        entityId: updated.id,
+        action: ActivityAction.DELETE,
+        shipmentId: before.shipmentId,
+        customerId: before.customerId,
+        summary: `Invoice ${before.invoiceNumber} deleted.`,
+        before: before as unknown as Record<string, unknown>,
+        actor: getAuditActor(ctx),
+      });
+    } else {
+      await recordEntityDiff({
+        companyId: ctx.companyId,
+        entityType: EntityType.INVOICE,
+        entityId: updated.id,
+        shipmentId: after.shipmentId,
+        customerId: after.customerId,
+        before: before as unknown as Record<string, unknown>,
+        after: after as unknown as Record<string, unknown>,
+        trackedFields: ["status"],
+        actor: getAuditActor(ctx),
+        fallbackSummary: `Invoice ${after.invoiceNumber} updated.`,
+      });
+    }
     revalidatePath("/finance/invoices");
     revalidatePath(`/finance/invoices/${updated.id}`);
     revalidatePath("/finance/ar");
@@ -413,18 +641,54 @@ export async function upsertGeneralExpenseAction(
     if (parsed.id) {
       const existing = await prisma.generalExpense.findFirst({
         where: { id: parsed.id, companyId: ctx.companyId },
-        select: { id: true },
+        select: {
+          id: true,
+          conceptCategory: true,
+          customConcept: true,
+          amount: true,
+          currencyCode: true,
+          dueDate: true,
+          status: true,
+          notes: true,
+        },
       });
       if (!existing) {
         throw new Error("General expense not found");
       }
-      await prisma.generalExpense.update({
+      const updated = await prisma.generalExpense.update({
         where: { id: existing.id },
         data: payload,
       });
+      await recordEntityDiff({
+        companyId: ctx.companyId,
+        entityType: EntityType.EXPENSE,
+        entityId: existing.id,
+        before: existing as unknown as Record<string, unknown>,
+        after: updated as unknown as Record<string, unknown>,
+        trackedFields: [
+          "conceptCategory",
+          "customConcept",
+          "amount",
+          "currencyCode",
+          "dueDate",
+          "status",
+          "notes",
+        ],
+        actor: getAuditActor(ctx),
+        fallbackSummary: "General expense updated.",
+      });
     } else {
-      await prisma.generalExpense.create({
+      const created = await prisma.generalExpense.create({
         data: payload,
+      });
+      await recordAuditEvent({
+        companyId: ctx.companyId,
+        entityType: EntityType.EXPENSE,
+        entityId: created.id,
+        action: ActivityAction.CREATE,
+        summary: "General expense created.",
+        after: created as unknown as Record<string, unknown>,
+        actor: getAuditActor(ctx),
       });
     }
 
@@ -456,12 +720,27 @@ export async function deleteGeneralExpenseAction(
         id,
         companyId: ctx.companyId,
       },
-      select: { id: true },
+      select: {
+        id: true,
+        conceptCategory: true,
+        amount: true,
+        currencyCode: true,
+        status: true,
+      },
     });
     if (!existing) {
       throw new Error("General expense not found");
     }
     await prisma.generalExpense.delete({ where: { id: existing.id } });
+    await recordAuditEvent({
+      companyId: ctx.companyId,
+      entityType: EntityType.EXPENSE,
+      entityId: existing.id,
+      action: ActivityAction.DELETE,
+      summary: `General expense ${existing.conceptCategory} deleted.`,
+      before: existing as unknown as Record<string, unknown>,
+      actor: getAuditActor(ctx),
+    });
     revalidatePath("/finance");
     revalidatePath("/finance/expenses");
     revalidatePath("/finance/ap");

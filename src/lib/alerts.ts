@@ -2,6 +2,8 @@ import { AlertSeverity, AlertStatus, AlertType } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { evaluateCompanyAlerts, type ShipmentAlertSnapshot } from "@/lib/action-center/rules-engine";
 import type { Prisma } from "@prisma/client";
+import { ActivityAction, ActivityActorType, EntityType } from "@prisma/client";
+import { recordAuditEvent } from "@/lib/audit";
 
 type AlertSyncResult = {
   created: number;
@@ -170,7 +172,7 @@ async function syncAlertsForSnapshots(input: {
   for (const candidate of candidateAlerts) {
     const existingAlert = existingByRuleKey.get(candidate.ruleKey);
     if (!existingAlert) {
-      await prisma.alert.create({
+      const createdAlert = await prisma.alert.create({
         data: {
           companyId: input.companyId,
           type: candidate.type,
@@ -184,6 +186,27 @@ async function syncAlertsForSnapshots(input: {
           shipmentId: candidate.shipmentId,
           customerId: candidate.customerId,
           metadata: candidate.metadata as Prisma.InputJsonValue,
+        },
+      });
+      await recordAuditEvent({
+        companyId: input.companyId,
+        entityType: EntityType.ALERT,
+        entityId: createdAlert.id,
+        action: ActivityAction.CREATE,
+        shipmentId: candidate.shipmentId ?? null,
+        customerId: candidate.customerId ?? null,
+        field: "status",
+        newValue: AlertStatus.OPEN,
+        summary: `Alert opened: ${candidate.title}.`,
+        metadata: {
+          ruleKey: candidate.ruleKey,
+          type: candidate.type,
+          severity: candidate.severity,
+          source: candidate.source,
+        },
+        actor: {
+          actorType: ActivityActorType.SYSTEM,
+          actorName: "Action Center rules engine",
         },
       });
       created += 1;
@@ -217,6 +240,29 @@ async function syncAlertsForSnapshots(input: {
       },
     });
     if (shouldReopen) {
+      await recordAuditEvent({
+        companyId: input.companyId,
+        entityType: EntityType.ALERT,
+        entityId: existingAlert.id,
+        action: ActivityAction.REOPEN,
+        shipmentId: candidate.shipmentId ?? null,
+        customerId: candidate.customerId ?? null,
+        field: "status",
+        oldValue: AlertStatus.RESOLVED,
+        newValue: AlertStatus.REOPENED,
+        summary: `Alert reopened: ${candidate.title}.`,
+        metadata: {
+          ruleKey: candidate.ruleKey,
+          type: candidate.type,
+          severity: candidate.severity,
+        },
+        actor: {
+          actorType: ActivityActorType.SYSTEM,
+          actorName: "Action Center rules engine",
+        },
+      });
+    }
+    if (shouldReopen) {
       reopened += 1;
     } else {
       updated += 1;
@@ -231,6 +277,27 @@ async function syncAlertsForSnapshots(input: {
       data: {
         status: AlertStatus.RESOLVED,
         resolvedAt: input.now,
+      },
+    });
+    await recordAuditEvent({
+      companyId: input.companyId,
+      entityType: EntityType.ALERT,
+      entityId: alert.id,
+      action: ActivityAction.RESOLVE,
+      shipmentId: alert.shipmentId ?? null,
+      customerId: alert.customerId ?? null,
+      field: "status",
+      oldValue: alert.status,
+      newValue: AlertStatus.RESOLVED,
+      summary: `Alert resolved automatically: ${alert.title}.`,
+      metadata: {
+        ruleKey: alert.ruleKey,
+        type: alert.type,
+        severity: alert.severity,
+      },
+      actor: {
+        actorType: ActivityActorType.SYSTEM,
+        actorName: "Action Center rules engine",
       },
     });
     resolved += 1;
@@ -372,7 +439,15 @@ export async function listAlertsForCompany(
     }));
 }
 
-export async function resolveAlertForCompany(input: { companyId: string; alertId: string }) {
+export async function resolveAlertForCompany(input: {
+  companyId: string;
+  alertId: string;
+  actor?: {
+    actorType?: ActivityActorType;
+    actorId?: string | null;
+    actorName?: string | null;
+  };
+}) {
   const alert = await prisma.alert.findFirst({
     where: {
       id: input.alertId,
@@ -394,6 +469,50 @@ export async function resolveAlertForCompany(input: { companyId: string; alertId
       resolvedAt: new Date(),
     },
   });
+  const resolvedAlert = await prisma.alert.findFirst({
+    where: {
+      id: alert.id,
+      companyId: input.companyId,
+    },
+    select: {
+      id: true,
+      title: true,
+      status: true,
+      shipmentId: true,
+      customerId: true,
+      ruleKey: true,
+      type: true,
+      severity: true,
+    },
+  });
+  if (resolvedAlert) {
+    await recordAuditEvent({
+      companyId: input.companyId,
+      entityType: EntityType.ALERT,
+      entityId: resolvedAlert.id,
+      action: ActivityAction.RESOLVE,
+      shipmentId: resolvedAlert.shipmentId ?? null,
+      customerId: resolvedAlert.customerId ?? null,
+      field: "status",
+      oldValue: alert.status,
+      newValue: AlertStatus.RESOLVED,
+      summary: `Alert marked resolved: ${resolvedAlert.title}.`,
+      metadata: {
+        ruleKey: resolvedAlert.ruleKey,
+        type: resolvedAlert.type,
+        severity: resolvedAlert.severity,
+      },
+      actor:
+        input.actor ??
+        ({
+          actorType: ActivityActorType.SYSTEM,
+          actorName: "Action Center resolver",
+        } satisfies {
+          actorType: ActivityActorType;
+          actorName: string;
+        }),
+    });
+  }
 }
 
 // Compatibility wrapper for existing consumers.

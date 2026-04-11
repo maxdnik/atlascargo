@@ -13,6 +13,8 @@ import {
   Truck,
 } from "lucide-react";
 import {
+  type ActivityAction,
+  type ActivityActorType,
   DocumentRecordStatus,
   FinancialRecordStatus,
   InvoiceLineType,
@@ -24,14 +26,7 @@ import {
 } from "@prisma/client";
 
 import type { ShipmentActionState } from "@/app/(dashboard)/shipments/actions";
-import {
-  cancelFinanceInvoiceAction,
-  createFinanceInvoiceAction,
-  deleteFinanceInvoiceAction,
-  issueFinanceInvoiceAfipAction,
-  markFinanceInvoicePaidAction,
-  updateFinanceInvoiceAction,
-} from "@/app/(dashboard)/finance/actions";
+import { AuditHistoryTimeline } from "@/components/audit/audit-history-timeline";
 import { MilestoneTimeline } from "@/components/shipments/milestone-timeline";
 import { ShipmentForm } from "@/components/shipments/shipment-form";
 
@@ -173,6 +168,17 @@ type ShipmentDetailViewModel = {
       amount: number;
       type: InvoiceLineType;
     }>;
+  }>;
+  auditHistory: Array<{
+    id: string;
+    action: ActivityAction;
+    actorType: ActivityActorType;
+    actorName: string;
+    summary: string;
+    field: string | null;
+    oldValue: string | null;
+    newValue: string | null;
+    timestamp: string;
   }>;
 };
 
@@ -1319,6 +1325,10 @@ export function ShipmentDetailClient({
             comment: milestone.comment ?? null,
           }))}
         />
+      </Card>
+
+      <Card title="Shipment history" subtitle="Audit trail of operational and financial changes">
+        <AuditHistoryTimeline items={shipment.auditHistory} />
       </Card>
 
       {canEditShipments ? (
