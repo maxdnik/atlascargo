@@ -1,3 +1,4 @@
+import Link from "next/link";
 import {
   AlertTriangle,
   ChartColumnBig,
@@ -9,8 +10,10 @@ import {
 } from "lucide-react";
 import { PermissionAction, PermissionResource } from "@prisma/client";
 import { getDashboardKpis } from "@/lib/dashboard";
+import { getStatusLabel } from "@/lib/shipment-state";
 import { formatNumber } from "@/lib/format";
 import { enforcePagePermission } from "@/lib/permissions";
+import { resolveActionCenterAlertAction } from "@/app/(dashboard)/dashboard/action-center/actions";
 
 export default async function DashboardPage() {
   const session = await enforcePagePermission(PermissionResource.DASHBOARD, PermissionAction.VIEW);
@@ -185,7 +188,7 @@ export default async function DashboardPage() {
                                       : "bg-slate-100 text-slate-700"
                             }`}
                           >
-                            {shipment.status}
+                            {shipment.statusLabel ?? getStatusLabel(shipment.status)}
                           </span>
                         </td>
                         <td className="px-4 py-3 font-medium text-slate-900">{shipment.shipmentNumber}</td>
@@ -287,6 +290,20 @@ export default async function DashboardPage() {
                       {alert.title}
                     </p>
                     <p className="text-xs text-slate-600">{alert.timestamp}</p>
+                    <div className="mt-2 flex items-center gap-3">
+                      <Link href={alert.ctaHref} className="text-xs font-medium text-blue-700 hover:text-blue-800">
+                        Open {alert.shipmentId ? "shipment" : "action center"}
+                      </Link>
+                      <form action={resolveActionCenterAlertAction}>
+                        <input type="hidden" name="alertId" value={alert.id} />
+                        <button
+                          type="submit"
+                          className="text-xs font-medium text-emerald-700 hover:text-emerald-800"
+                        >
+                          Mark resolved
+                        </button>
+                      </form>
+                    </div>
                   </div>
                 ))
               )}
