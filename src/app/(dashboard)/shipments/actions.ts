@@ -19,6 +19,10 @@ import {
 import { enforceActionPermission } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import {
+  runAlertChecksForInvoiceMutation,
+  runAlertChecksForShipmentUpdate,
+} from "@/lib/alerts";
+import {
   addInvoiceLine,
   cancelInvoice,
   createInvoiceForShipment,
@@ -604,6 +608,10 @@ export async function createShipmentAction(
 
     revalidatePath("/shipments");
     revalidatePath("/dashboard");
+    await runAlertChecksForShipmentUpdate({
+      companyId: ctx.companyId,
+      shipmentId: created.id,
+    });
 
     return { success: true };
   } catch (error) {
@@ -822,6 +830,10 @@ export async function updateShipmentAction(
     revalidatePath("/shipments");
     revalidatePath(`/shipments/${updated.id}`);
     revalidatePath("/dashboard");
+    await runAlertChecksForShipmentUpdate({
+      companyId: ctx.companyId,
+      shipmentId: updated.id,
+    });
 
     return { success: true };
   } catch (error) {
@@ -1023,6 +1035,10 @@ export async function upsertShipmentDocumentAction(
 
     revalidatePath(`/shipments/${shipment.id}`);
     revalidatePath("/shipments");
+    await runAlertChecksForShipmentUpdate({
+      companyId: ctx.companyId,
+      shipmentId: shipment.id,
+    });
     return { success: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
@@ -1065,6 +1081,10 @@ export async function deleteShipmentDocumentAction(
     await prisma.shipmentDocument.delete({ where: { id: existing.id } });
     revalidatePath(`/shipments/${existing.shipmentId}`);
     revalidatePath("/shipments");
+    await runAlertChecksForShipmentUpdate({
+      companyId: ctx.companyId,
+      shipmentId: existing.shipmentId,
+    });
     return { success: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
@@ -1481,6 +1501,10 @@ export async function createInvoiceAction(
     revalidatePath(`/finance/invoices/${created.id}`);
     revalidatePath("/finance/invoices");
     revalidatePath("/finance/ar");
+    await runAlertChecksForInvoiceMutation({
+      companyId: ctx.companyId,
+      shipmentId: parsed.shipmentId,
+    });
     return { success: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
@@ -1540,6 +1564,10 @@ export async function upsertInvoiceAction(
     revalidatePath(`/finance/invoices/${parsed.id}`);
     revalidatePath("/finance/invoices");
     revalidatePath("/finance/ar");
+    await runAlertChecksForInvoiceMutation({
+      companyId: ctx.companyId,
+      shipmentId: parsed.shipmentId,
+    });
     return { success: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
@@ -1575,6 +1603,10 @@ export async function issueInvoiceAFIPAction(
     revalidatePath(`/finance/invoices/${issued.id}`);
     revalidatePath("/finance/invoices");
     revalidatePath("/finance/ar");
+    await runAlertChecksForInvoiceMutation({
+      companyId: ctx.companyId,
+      shipmentId: issued.shipmentId,
+    });
     return { success: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
@@ -1610,6 +1642,10 @@ export async function markInvoicePaidAction(
     revalidatePath(`/finance/invoices/${updated.id}`);
     revalidatePath("/finance/invoices");
     revalidatePath("/finance/ar");
+    await runAlertChecksForInvoiceMutation({
+      companyId: ctx.companyId,
+      shipmentId: updated.shipmentId,
+    });
     return { success: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
@@ -1645,6 +1681,10 @@ export async function cancelInvoiceAction(
     revalidatePath(`/finance/invoices/${updated.id}`);
     revalidatePath("/finance/invoices");
     revalidatePath("/finance/ar");
+    await runAlertChecksForInvoiceMutation({
+      companyId: ctx.companyId,
+      shipmentId: updated.shipmentId,
+    });
     return { success: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
@@ -1679,6 +1719,10 @@ export async function deleteInvoiceAction(
     revalidatePath(`/shipments/${deleted.shipmentId}`);
     revalidatePath("/finance/invoices");
     revalidatePath("/finance/ar");
+    await runAlertChecksForInvoiceMutation({
+      companyId: ctx.companyId,
+      shipmentId: deleted.shipmentId,
+    });
     return { success: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
@@ -1756,6 +1800,10 @@ export async function upsertMilestoneAction(
 
     revalidatePath(`/shipments/${shipment.id}`);
     revalidatePath("/shipments");
+    await runAlertChecksForShipmentUpdate({
+      companyId: ctx.companyId,
+      shipmentId: shipment.id,
+    });
     return { success: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
