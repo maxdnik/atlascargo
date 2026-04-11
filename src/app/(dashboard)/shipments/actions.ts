@@ -1306,29 +1306,15 @@ export async function upsertShipmentDocumentAction(
         action: ActivityAction.PARSE_DOCUMENT,
         shipmentId: shipment.id,
         customerId: shipment.customerId,
-        summary: `Document ${created.fileName} parsed and indexed.`,
+        summary: `Document parsing attempted for ${created.fileName}.`,
         metadata: {
           docType: created.docType,
+          parseAttempted: true,
+          appliedChangesCount: 0,
         },
         actor: {
           actorType: ActivityActorType.SYSTEM,
           actorName: "Document parser",
-        },
-      });
-      await recordAuditEvent({
-        companyId: ctx.companyId,
-        entityType: EntityType.DOCUMENT,
-        entityId: created.id,
-        action: ActivityAction.APPLY_DOCUMENT_DATA,
-        shipmentId: shipment.id,
-        customerId: shipment.customerId,
-        summary: "Parsed document data applied to operational record.",
-        metadata: {
-          appliedBy: "upsertShipmentDocumentAction",
-        },
-        actor: {
-          actorType: ActivityActorType.SYSTEM,
-          actorName: "Document apply flow",
         },
       });
     }

@@ -345,6 +345,7 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
           description: event.description,
           actorType: event.actorType,
           actorName: event.actorName,
+          reference: event.reference,
           metadata: event.metadata,
           timestamp: event.timestamp,
         })),

@@ -1,7 +1,6 @@
 import {
   ActivityAction,
   ActivityActorType,
-  AlertStatus,
   EntityType,
 } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
@@ -23,7 +22,16 @@ export type ShipmentTimelineEvent = {
   actorType: ActivityActorType;
   actorName: string;
   timestamp: Date;
+  reference: ShipmentTimelineReference | null;
   metadata: Record<string, unknown> | null;
+};
+
+export type ShipmentTimelineReference = {
+  entityType: EntityType;
+  entityId: string;
+  shipmentId: string | null;
+  customerId: string | null;
+  label: string | null;
 };
 
 type GetShipmentTimelineInput = {
@@ -49,6 +57,42 @@ function compactMetadata(
   );
   if (entries.length === 0) return null;
   return Object.fromEntries(entries);
+}
+
+function readMetadata(metadata: unknown): Record<string, unknown> | null {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return null;
+  }
+  return metadata as Record<string, unknown>;
+}
+
+function readMetadataString(metadata: Record<string, unknown> | null, key: string) {
+  const value = metadata?.[key];
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function shouldIncludeTimelineRow(input: {
+  action: ActivityAction;
+  metadata: Record<string, unknown> | null;
+}) {
+  if (input.action !== ActivityAction.APPLY_DOCUMENT_DATA) return true;
+
+  const appliedChangesCountRaw = input.metadata?.appliedChangesCount;
+  if (typeof appliedChangesCountRaw === "number" && appliedChangesCountRaw > 0) {
+    return true;
+  }
+
+  const appliedFieldsRaw = input.metadata?.appliedFieldNames;
+  if (Array.isArray(appliedFieldsRaw) && appliedFieldsRaw.length > 0) {
+    return true;
+  }
+
+  const appliedRecordsRaw = input.metadata?.appliedRecords;
+  if (Array.isArray(appliedRecordsRaw) && appliedRecordsRaw.length > 0) {
+    return true;
+  }
+
+  return false;
 }
 
 function classifyCategory(input: {
@@ -160,6 +204,18 @@ function deriveEventType(input: {
   }
   if (
     input.entityType === EntityType.SHIPMENT_COST &&
+    input.action === ActivityAction.MARK_PAID
+  ) {
+    return "SHIPMENT_COST_MARKED_PAID";
+  }
+  if (
+    input.entityType === EntityType.EXPENSE &&
+    input.action === ActivityAction.MARK_PAID
+  ) {
+    return "EXPENSE_MARKED_PAID";
+  }
+  if (
+    input.entityType === EntityType.SHIPMENT_COST &&
     input.action === ActivityAction.CREATE
   ) {
     return "SHIPMENT_COST_ADDED";
@@ -204,16 +260,42 @@ function buildTitle(eventType: string, row: {
     return `${milestoneCode ? sentenceCase(milestoneCode) : "Milestone"} delayed`;
   }
   if (eventType === "DOCUMENT_UPLOADED") return "Document uploaded";
-  if (eventType === "DOCUMENT_PARSED") return "Document parsed";
+  if (eventType === "DOCUMENT_PARSED") return "Document parsing attempted";
   if (eventType === "DOCUMENT_DATA_APPLIED") return "Parsed document data applied";
   if (eventType === "INVOICE_CREATED") return "Invoice created";
   if (eventType === "INVOICE_ISSUED") return "Invoice issued";
   if (eventType === "INVOICE_MARKED_PAID") return "Invoice marked paid";
+  if (eventType === "SHIPMENT_COST_MARKED_PAID") return "Shipment cost marked as paid";
+  if (eventType === "EXPENSE_MARKED_PAID") return "Expense marked as paid";
   if (eventType === "SHIPMENT_COST_ADDED") return "Shipment cost added";
   if (eventType === "EXPENSE_ADDED") return "Expense added";
   if (eventType === "ALERT_OPENED") return "Alert opened";
   if (eventType === "ALERT_RESOLVED") return "Alert resolved";
   return `${sentenceCase(row.entityType)} ${sentenceCase(row.action)}`;
+}
+
+function buildReference(row: {
+  entityType: EntityType;
+  entityId: string;
+  shipmentId: string | null;
+  customerId: string | null;
+  metadata: Record<string, unknown> | null;
+}): ShipmentTimelineReference {
+  const label =
+    readMetadataString(row.metadata, "invoiceNumber") ??
+    readMetadataString(row.metadata, "fileName") ??
+    readMetadataString(row.metadata, "docType") ??
+    readMetadataString(row.metadata, "concept") ??
+    readMetadataString(row.metadata, "conceptCategory") ??
+    readMetadataString(row.metadata, "title");
+
+  return {
+    entityType: row.entityType,
+    entityId: row.entityId,
+    shipmentId: row.shipmentId,
+    customerId: row.customerId,
+    label,
+  };
 }
 
 function buildDescription(row: {
@@ -233,346 +315,89 @@ function buildDescription(row: {
 }
 
 export async function getShipmentTimeline(input: GetShipmentTimelineInput) {
-  const [auditRows, shipment, milestones, documents, invoices, shipmentCosts, expenses, alerts] =
-    await Promise.all([
-      prisma.activityLog.findMany({
-        where: {
-          companyId: input.companyId,
-          shipmentId: input.shipmentId,
-        },
-        include: {
-          actor: {
-            select: {
-              name: true,
-            },
-          },
-        },
-        orderBy: [{ createdAt: "desc" }],
-        take: Math.max(80, Math.min((input.limit ?? 160) * 3, 600)),
-      }),
-      prisma.shipment.findFirst({
-        where: {
-          id: input.shipmentId,
-          companyId: input.companyId,
-        },
-        select: {
-          id: true,
-          shipmentNumber: true,
-          createdAt: true,
-        },
-      }),
-      prisma.shipmentMilestone.findMany({
-        where: { shipmentId: input.shipmentId },
-        select: {
-          id: true,
-          code: true,
-          label: true,
-          status: true,
-          expectedAt: true,
-          actualAt: true,
-          createdAt: true,
-          updatedAt: true,
-        },
-      }),
-      prisma.shipmentDocument.findMany({
-        where: { shipmentId: input.shipmentId },
-        select: {
-          id: true,
-          docType: true,
-          fileName: true,
-          createdAt: true,
-        },
-      }),
-      prisma.invoice.findMany({
-        where: {
-          shipmentId: input.shipmentId,
-          companyId: input.companyId,
-        },
-        select: {
-          id: true,
-          invoiceNumber: true,
-          status: true,
-          createdAt: true,
-          updatedAt: true,
-        },
-      }),
-      prisma.shipmentCost.findMany({
-        where: {
-          shipmentId: input.shipmentId,
-          companyId: input.companyId,
-        },
-        select: {
-          id: true,
-          conceptCategory: true,
-          createdAt: true,
-        },
-      }),
-      prisma.expense.findMany({
-        where: {
-          shipmentId: input.shipmentId,
-          companyId: input.companyId,
-        },
-        select: {
-          id: true,
-          concept: true,
-          createdAt: true,
-        },
-      }),
-      prisma.alert.findMany({
-        where: {
-          companyId: input.companyId,
-          shipmentId: input.shipmentId,
-        },
-        select: {
-          id: true,
-          title: true,
-          status: true,
-          createdAt: true,
-          resolvedAt: true,
-        },
-      }),
-    ]);
-
-  const timelineFromAudit: ShipmentTimelineEvent[] = auditRows.map((row) => {
-    const eventType = deriveEventType({
-      entityType: row.entityType,
-      action: row.action,
-      field: row.field ?? null,
-      oldValue: row.oldValue ?? null,
-      newValue: row.newValue ?? null,
-      actorType: row.actorType,
-    });
-
-    return {
-      id: row.id,
+  const auditRows = await prisma.activityLog.findMany({
+    where: {
+      companyId: input.companyId,
       shipmentId: input.shipmentId,
-      eventType,
-      category: classifyCategory({
-        entityType: row.entityType,
+    },
+    include: {
+      actor: {
+        select: {
+          name: true,
+        },
+      },
+    },
+    orderBy: [{ createdAt: "desc" }],
+    take: Math.max(80, Math.min((input.limit ?? 160) * 3, 600)),
+  });
+
+  const timelineFromAudit: ShipmentTimelineEvent[] = auditRows
+    .filter((row) =>
+      shouldIncludeTimelineRow({
         action: row.action,
-        actorType: row.actorType,
+        metadata: readMetadata(row.metadata),
       }),
-      title: buildTitle(eventType, {
-        entityType: row.entityType,
-        action: row.action,
-        metadata: (row.metadata as Record<string, unknown> | null) ?? null,
-      }),
-      description: buildDescription({
-        summary: row.summary ?? null,
+    )
+    .map((row) => {
+      const metadata = readMetadata(row.metadata);
+      const eventType = deriveEventType({
         entityType: row.entityType,
         action: row.action,
         field: row.field ?? null,
         oldValue: row.oldValue ?? null,
         newValue: row.newValue ?? null,
-      }),
-      actorType: row.actorType,
-      actorName:
-        row.actorType === ActivityActorType.SYSTEM
-          ? row.actorName ?? "System"
-          : row.actorName ?? row.actor?.name ?? "Unknown user",
-      timestamp: row.createdAt,
-      metadata: compactMetadata({
-        source: "audit",
-        entityType: row.entityType,
-        entityId: row.entityId,
-        action: row.action,
-        field: row.field ?? undefined,
-        oldValue: row.oldValue ?? undefined,
-        newValue: row.newValue ?? undefined,
-        ...(row.metadata as Record<string, unknown> | null),
-      }),
-    };
-  });
-
-  const hasAuditCreate = new Set(
-    auditRows
-      .filter((row) => row.action === ActivityAction.CREATE)
-      .map((row) => `${row.entityType}:${row.entityId}`),
-  );
-
-  const fallbackEvents: ShipmentTimelineEvent[] = [];
-
-  if (shipment && !hasAuditCreate.has(`${EntityType.SHIPMENT}:${shipment.id}`)) {
-    fallbackEvents.push({
-      id: `fallback:shipment:${shipment.id}:created`,
-      shipmentId: shipment.id,
-      eventType: "SHIPMENT_CREATED",
-      category: "operations",
-      title: "Shipment created",
-      description: `Shipment ${shipment.shipmentNumber} was created.`,
-      actorType: ActivityActorType.SYSTEM,
-      actorName: "System",
-      timestamp: shipment.createdAt,
-      metadata: {
-        source: "shipment",
-        entityType: EntityType.SHIPMENT,
-        entityId: shipment.id,
-      },
-    });
-  }
-
-  for (const milestone of milestones) {
-    const key = `${EntityType.MILESTONE}:${milestone.id}`;
-    if (!hasAuditCreate.has(key)) {
-      fallbackEvents.push({
-        id: `fallback:milestone:${milestone.id}:created`,
-        shipmentId: input.shipmentId,
-        eventType: "MILESTONE_CREATED",
-        category: "operations",
-        title: `${milestone.label} milestone created`,
-        description: `Milestone ${milestone.label} was added to the shipment workflow.`,
-        actorType: ActivityActorType.SYSTEM,
-        actorName: "System",
-        timestamp: milestone.createdAt,
-        metadata: {
-          source: "milestone",
-          entityType: EntityType.MILESTONE,
-          entityId: milestone.id,
-          milestoneCode: milestone.code,
-          milestoneStatus: milestone.status,
-        },
+        actorType: row.actorType,
       });
-    }
-  }
 
-  for (const document of documents) {
-    const key = `${EntityType.DOCUMENT}:${document.id}`;
-    if (hasAuditCreate.has(key)) continue;
-    fallbackEvents.push({
-      id: `fallback:document:${document.id}:uploaded`,
-      shipmentId: input.shipmentId,
-      eventType: "DOCUMENT_UPLOADED",
-      category: "documents",
-      title: `${sentenceCase(document.docType)} document uploaded`,
-      description: `${document.fileName} was uploaded to shipment documents.`,
-      actorType: ActivityActorType.SYSTEM,
-      actorName: "System",
-      timestamp: document.createdAt,
-      metadata: {
-        source: "document",
-        entityType: EntityType.DOCUMENT,
-        entityId: document.id,
-        docType: document.docType,
-      },
-    });
-  }
-
-  for (const invoice of invoices) {
-    const key = `${EntityType.INVOICE}:${invoice.id}`;
-    if (!hasAuditCreate.has(key)) {
-      fallbackEvents.push({
-        id: `fallback:invoice:${invoice.id}:created`,
+      return {
+        id: row.id,
         shipmentId: input.shipmentId,
-        eventType: "INVOICE_CREATED",
-        category: "finance",
-        title: "Invoice created",
-        description: `Invoice ${invoice.invoiceNumber} was created.`,
-        actorType: ActivityActorType.SYSTEM,
-        actorName: "System",
-        timestamp: invoice.createdAt,
-        metadata: {
-          source: "invoice",
-          entityType: EntityType.INVOICE,
-          entityId: invoice.id,
-          invoiceStatus: invoice.status,
-        },
-      });
-    }
-  }
-
-  for (const shipmentCost of shipmentCosts) {
-    const key = `${EntityType.SHIPMENT_COST}:${shipmentCost.id}`;
-    if (hasAuditCreate.has(key)) continue;
-    fallbackEvents.push({
-      id: `fallback:shipment-cost:${shipmentCost.id}:created`,
-      shipmentId: input.shipmentId,
-      eventType: "SHIPMENT_COST_ADDED",
-      category: "finance",
-      title: "Shipment cost added",
-      description: `Shipment cost ${sentenceCase(shipmentCost.conceptCategory)} was registered.`,
-      actorType: ActivityActorType.SYSTEM,
-      actorName: "System",
-      timestamp: shipmentCost.createdAt,
-      metadata: {
-        source: "shipment_cost",
-        entityType: EntityType.SHIPMENT_COST,
-        entityId: shipmentCost.id,
-        conceptCategory: shipmentCost.conceptCategory,
-      },
+        eventType,
+        category: classifyCategory({
+          entityType: row.entityType,
+          action: row.action,
+          actorType: row.actorType,
+        }),
+        title: buildTitle(eventType, {
+          entityType: row.entityType,
+          action: row.action,
+          metadata,
+        }),
+        description: buildDescription({
+          summary: row.summary ?? null,
+          entityType: row.entityType,
+          action: row.action,
+          field: row.field ?? null,
+          oldValue: row.oldValue ?? null,
+          newValue: row.newValue ?? null,
+        }),
+        actorType: row.actorType,
+        actorName:
+          row.actorType === ActivityActorType.SYSTEM
+            ? row.actorName ?? "System"
+            : row.actorName ?? row.actor?.name ?? "Unknown user",
+        timestamp: row.createdAt,
+        reference: buildReference({
+          entityType: row.entityType,
+          entityId: row.entityId,
+          shipmentId: row.shipmentId ?? null,
+          customerId: row.customerId ?? null,
+          metadata,
+        }),
+        metadata: compactMetadata({
+          source: "audit",
+          entityType: row.entityType,
+          entityId: row.entityId,
+          action: row.action,
+          field: row.field ?? undefined,
+          oldValue: row.oldValue ?? undefined,
+          newValue: row.newValue ?? undefined,
+          ...metadata,
+        }),
+      };
     });
-  }
 
-  for (const expense of expenses) {
-    const key = `${EntityType.EXPENSE}:${expense.id}`;
-    if (hasAuditCreate.has(key)) continue;
-    fallbackEvents.push({
-      id: `fallback:expense:${expense.id}:created`,
-      shipmentId: input.shipmentId,
-      eventType: "EXPENSE_ADDED",
-      category: "finance",
-      title: "Expense added",
-      description: `Expense ${expense.concept} was registered for this shipment.`,
-      actorType: ActivityActorType.SYSTEM,
-      actorName: "System",
-      timestamp: expense.createdAt,
-      metadata: {
-        source: "expense",
-        entityType: EntityType.EXPENSE,
-        entityId: expense.id,
-      },
-    });
-  }
-
-  for (const alert of alerts) {
-    if (!hasAuditCreate.has(`${EntityType.ALERT}:${alert.id}`)) {
-      fallbackEvents.push({
-        id: `fallback:alert:${alert.id}:opened`,
-        shipmentId: input.shipmentId,
-        eventType: "ALERT_OPENED",
-        category: "alerts",
-        title: "Alert opened",
-        description: alert.title,
-        actorType: ActivityActorType.SYSTEM,
-        actorName: "Alert engine",
-        timestamp: alert.createdAt,
-        metadata: {
-          source: "alert",
-          entityType: EntityType.ALERT,
-          entityId: alert.id,
-          status: alert.status,
-        },
-      });
-    }
-
-    const hasResolveAudit = auditRows.some(
-      (row) =>
-        row.entityType === EntityType.ALERT &&
-        row.entityId === alert.id &&
-        row.action === ActivityAction.RESOLVE,
-    );
-
-    if (alert.status === AlertStatus.RESOLVED && alert.resolvedAt && !hasResolveAudit) {
-      fallbackEvents.push({
-        id: `fallback:alert:${alert.id}:resolved`,
-        shipmentId: input.shipmentId,
-        eventType: "ALERT_RESOLVED",
-        category: "alerts",
-        title: "Alert resolved",
-        description: alert.title,
-        actorType: ActivityActorType.SYSTEM,
-        actorName: "Alert engine",
-        timestamp: alert.resolvedAt,
-        metadata: {
-          source: "alert",
-          entityType: EntityType.ALERT,
-          entityId: alert.id,
-          status: AlertStatus.RESOLVED,
-        },
-      });
-    }
-  }
-
-  const allEvents = [...timelineFromAudit, ...fallbackEvents].sort((left, right) => {
+  const allEvents = timelineFromAudit.sort((left, right) => {
     const delta = right.timestamp.getTime() - left.timestamp.getTime();
     return delta === 0 ? left.id.localeCompare(right.id) : delta;
   });

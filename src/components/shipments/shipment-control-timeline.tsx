@@ -30,6 +30,13 @@ export type ShipmentControlTimelineItem = {
   actorType: ActivityActorType;
   actorName: string;
   timestamp: string | Date;
+  reference: {
+    entityType: string;
+    entityId: string;
+    shipmentId: string | null;
+    customerId: string | null;
+    label: string | null;
+  } | null;
   metadata: Record<string, unknown> | null;
 };
 
