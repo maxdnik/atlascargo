@@ -711,8 +711,9 @@ export async function createShipmentAction(
       },
       actor: getAuditActor(ctx),
     });
-    revalidatePath("/shipments");
-    revalidatePath("/dashboard");
+    revalidateCoreShipmentSurfaces({
+      shipmentId: created.id,
+    });
 
     return { success: true };
   } catch (error) {
@@ -937,9 +938,9 @@ export async function updateShipmentAction(
       fallbackSummary: `Shipment ${updated.shipmentNumber} updated.`,
     });
 
-    revalidatePath("/shipments");
-    revalidatePath(`/shipments/${updated.id}`);
-    revalidatePath("/dashboard");
+    revalidateCoreShipmentSurfaces({
+      shipmentId: updated.id,
+    });
 
     return { success: true };
   } catch (error) {
@@ -1170,6 +1171,34 @@ async function handleShipmentSideEffects(input: {
   });
 }
 
+function revalidateCoreShipmentSurfaces(input: {
+  shipmentId: string;
+  affectsFinance?: boolean;
+  affectsQuotes?: boolean;
+  invoiceDetailId?: string;
+}) {
+  revalidatePath("/shipments");
+  revalidatePath(`/shipments/${input.shipmentId}`);
+  revalidatePath("/dashboard");
+  revalidatePath("/dashboard/action-center");
+
+  if (input.affectsFinance) {
+    revalidatePath("/finance");
+    revalidatePath("/finance/ar");
+    revalidatePath("/finance/forecast");
+    revalidatePath("/finance/profitability");
+    revalidatePath("/finance/ap");
+    revalidatePath("/finance/invoices");
+    if (input.invoiceDetailId) {
+      revalidatePath(`/finance/invoices/${input.invoiceDetailId}`);
+    }
+  }
+
+  if (input.affectsQuotes) {
+    revalidatePath("/quotes");
+  }
+}
+
 export async function upsertShipmentDocumentAction(
   _prevState: ShipmentActionState,
   formData: FormData,
@@ -1304,10 +1333,11 @@ export async function upsertShipmentDocumentAction(
       });
     }
 
-    revalidatePath(`/shipments/${shipment.id}`);
-    revalidatePath("/shipments");
     await runAlertChecksForShipmentUpdate({
       companyId: ctx.companyId,
+      shipmentId: shipment.id,
+    });
+    revalidateCoreShipmentSurfaces({
       shipmentId: shipment.id,
     });
     return { success: true };
@@ -1369,10 +1399,11 @@ export async function deleteShipmentDocumentAction(
       before: existing as unknown as Record<string, unknown>,
       actor: getAuditActor(ctx),
     });
-    revalidatePath(`/shipments/${existing.shipmentId}`);
-    revalidatePath("/shipments");
     await runAlertChecksForShipmentUpdate({
       companyId: ctx.companyId,
+      shipmentId: existing.shipmentId,
+    });
+    revalidateCoreShipmentSurfaces({
       shipmentId: existing.shipmentId,
     });
     return { success: true };
@@ -1503,8 +1534,9 @@ export async function upsertRevenueAction(
     if (runRevenueAudit) {
       await runRevenueAudit();
     }
-    revalidatePath(`/shipments/${shipment.id}`);
-    revalidatePath("/shipments");
+    revalidateCoreShipmentSurfaces({
+      shipmentId: shipment.id,
+    });
     return { success: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
@@ -1565,8 +1597,9 @@ export async function deleteRevenueAction(
       before: existing as unknown as Record<string, unknown>,
       actor: getAuditActor(ctx),
     });
-    revalidatePath(`/shipments/${existing.shipmentId}`);
-    revalidatePath("/shipments");
+    revalidateCoreShipmentSurfaces({
+      shipmentId: existing.shipmentId,
+    });
     return { success: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
@@ -1699,8 +1732,9 @@ export async function upsertExpenseAction(
     if (runExpenseAudit) {
       await runExpenseAudit();
     }
-    revalidatePath(`/shipments/${shipment.id}`);
-    revalidatePath("/shipments");
+    revalidateCoreShipmentSurfaces({
+      shipmentId: shipment.id,
+    });
     return { success: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
@@ -1765,8 +1799,9 @@ export async function deleteExpenseAction(
       before: existing as unknown as Record<string, unknown>,
       actor: getAuditActor(ctx),
     });
-    revalidatePath(`/shipments/${existing.shipmentId}`);
-    revalidatePath("/shipments");
+    revalidateCoreShipmentSurfaces({
+      shipmentId: existing.shipmentId,
+    });
     return { success: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
@@ -1894,12 +1929,10 @@ export async function upsertShipmentCostAction(
     if (runShipmentCostAudit) {
       await runShipmentCostAudit();
     }
-    revalidatePath(`/shipments/${shipment.id}`);
-    revalidatePath("/shipments");
-    revalidatePath("/finance");
-    revalidatePath("/finance/profitability");
-    revalidatePath("/finance/forecast");
-    revalidatePath("/finance/ap");
+    revalidateCoreShipmentSurfaces({
+      shipmentId: shipment.id,
+      affectsFinance: true,
+    });
     return { success: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
@@ -1965,12 +1998,10 @@ export async function deleteShipmentCostAction(
       before: existing as unknown as Record<string, unknown>,
       actor: getAuditActor(ctx),
     });
-    revalidatePath(`/shipments/${existing.shipmentId}`);
-    revalidatePath("/shipments");
-    revalidatePath("/finance");
-    revalidatePath("/finance/profitability");
-    revalidatePath("/finance/forecast");
-    revalidatePath("/finance/ap");
+    revalidateCoreShipmentSurfaces({
+      shipmentId: existing.shipmentId,
+      affectsFinance: true,
+    });
     return { success: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
@@ -2033,13 +2064,14 @@ export async function createInvoiceAction(
       actor: getAuditActor(ctx),
     });
 
-    revalidatePath(`/shipments/${parsed.shipmentId}`);
-    revalidatePath(`/finance/invoices/${created.id}`);
-    revalidatePath("/finance/invoices");
-    revalidatePath("/finance/ar");
     await runAlertChecksForInvoiceMutation({
       companyId: ctx.companyId,
       shipmentId: parsed.shipmentId,
+    });
+    revalidateCoreShipmentSurfaces({
+      shipmentId: parsed.shipmentId,
+      affectsFinance: true,
+      invoiceDetailId: created.id,
     });
     return { success: true };
   } catch (error) {
@@ -2184,13 +2216,14 @@ export async function upsertInvoiceAction(
       actor: getAuditActor(ctx),
     });
 
-    revalidatePath(`/shipments/${parsed.shipmentId}`);
-    revalidatePath(`/finance/invoices/${parsed.id}`);
-    revalidatePath("/finance/invoices");
-    revalidatePath("/finance/ar");
     await runAlertChecksForInvoiceMutation({
       companyId: ctx.companyId,
       shipmentId: parsed.shipmentId,
+    });
+    revalidateCoreShipmentSurfaces({
+      shipmentId: parsed.shipmentId,
+      affectsFinance: true,
+      invoiceDetailId: parsed.id,
     });
     return { success: true };
   } catch (error) {
@@ -2257,13 +2290,14 @@ export async function issueInvoiceAFIPAction(
       actor: getAuditActor(ctx),
     });
 
-    revalidatePath(`/shipments/${issued.shipmentId}`);
-    revalidatePath(`/finance/invoices/${issued.id}`);
-    revalidatePath("/finance/invoices");
-    revalidatePath("/finance/ar");
     await runAlertChecksForInvoiceMutation({
       companyId: ctx.companyId,
       shipmentId: issued.shipmentId,
+    });
+    revalidateCoreShipmentSurfaces({
+      shipmentId: issued.shipmentId,
+      affectsFinance: true,
+      invoiceDetailId: issued.id,
     });
     return { success: true };
   } catch (error) {
@@ -2352,14 +2386,14 @@ export async function registerShipmentInvoicePaymentAction(
       },
     });
 
-    revalidatePath(`/shipments/${invoice.shipmentId}`);
-    revalidatePath(`/finance/invoices/${invoice.id}`);
-    revalidatePath("/finance/invoices");
-    revalidatePath("/finance/ar");
-    revalidatePath("/finance/forecast");
     await runAlertChecksForInvoiceMutation({
       companyId: ctx.companyId,
       shipmentId: invoice.shipmentId,
+    });
+    revalidateCoreShipmentSurfaces({
+      shipmentId: invoice.shipmentId,
+      affectsFinance: true,
+      invoiceDetailId: invoice.id,
     });
     return { success: true };
   } catch (error) {
@@ -2425,13 +2459,14 @@ export async function cancelInvoiceAction(
       actor: getAuditActor(ctx),
     });
 
-    revalidatePath(`/shipments/${updated.shipmentId}`);
-    revalidatePath(`/finance/invoices/${updated.id}`);
-    revalidatePath("/finance/invoices");
-    revalidatePath("/finance/ar");
     await runAlertChecksForInvoiceMutation({
       companyId: ctx.companyId,
       shipmentId: updated.shipmentId,
+    });
+    revalidateCoreShipmentSurfaces({
+      shipmentId: updated.shipmentId,
+      affectsFinance: true,
+      invoiceDetailId: updated.id,
     });
     return { success: true };
   } catch (error) {
@@ -2492,12 +2527,13 @@ export async function deleteInvoiceAction(
       actor: getAuditActor(ctx),
     });
 
-    revalidatePath(`/shipments/${deleted.shipmentId}`);
-    revalidatePath("/finance/invoices");
-    revalidatePath("/finance/ar");
     await runAlertChecksForInvoiceMutation({
       companyId: ctx.companyId,
       shipmentId: deleted.shipmentId,
+    });
+    revalidateCoreShipmentSurfaces({
+      shipmentId: deleted.shipmentId,
+      affectsFinance: true,
     });
     return { success: true };
   } catch (error) {
@@ -2620,8 +2656,9 @@ export async function upsertMilestoneAction(
       });
     }
 
-    revalidatePath(`/shipments/${shipment.id}`);
-    revalidatePath("/shipments");
+    revalidateCoreShipmentSurfaces({
+      shipmentId: shipment.id,
+    });
     return { success: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
@@ -2793,9 +2830,10 @@ export async function createShipmentFromQuoteAction(
       },
       actor: getAuditActor(ctx),
     });
-    revalidatePath("/shipments");
-    revalidatePath("/quotes");
-    revalidatePath(`/shipments/${created.id}`);
+    revalidateCoreShipmentSurfaces({
+      shipmentId: created.id,
+      affectsQuotes: true,
+    });
     return { success: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
@@ -2843,6 +2881,13 @@ export async function deleteShipmentAction(
 
     revalidatePath("/shipments");
     revalidatePath("/dashboard");
+    revalidatePath("/dashboard/action-center");
+    revalidatePath("/finance");
+    revalidatePath("/finance/ar");
+    revalidatePath("/finance/forecast");
+    revalidatePath("/finance/profitability");
+    revalidatePath("/finance/ap");
+    revalidatePath("/finance/invoices");
 
     return { success: true };
   } catch (error) {

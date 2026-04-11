@@ -1,6 +1,6 @@
 import { AlertSeverity, AlertStatus, AlertType, InvoiceStatus, ShipmentStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { listAlertsForCompany, runScheduledAlertChecksForCompany, type AlertFeedRow } from "@/lib/alerts";
+import { listAlertsForCompany, type AlertFeedRow } from "@/lib/alerts";
 
 type Severity = AlertSeverity;
 
@@ -125,8 +125,6 @@ export async function getActionCenterData(
     ...filters,
     status: filters.status ?? "ACTIVE",
   };
-  await runScheduledAlertChecksForCompany(companyId);
-
   const [alerts, recentShipments, recentInvoices] = await Promise.all([
     listAlertsForCompany(
       { companyId },

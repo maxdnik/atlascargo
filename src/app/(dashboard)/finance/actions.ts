@@ -125,6 +125,36 @@ function getAuditActor(ctx: { userId: string }) {
   };
 }
 
+function revalidateCoreFinanceSurfaces(input: {
+  shipmentId?: string | null;
+  invoiceId?: string;
+  includeExpenses?: boolean;
+}) {
+  revalidatePath("/shipments");
+  if (input.shipmentId) {
+    revalidatePath(`/shipments/${input.shipmentId}`);
+  }
+
+  revalidatePath("/dashboard");
+  revalidatePath("/dashboard/action-center");
+
+  revalidatePath("/finance");
+  revalidatePath("/finance/ar");
+  revalidatePath("/finance/ap");
+  revalidatePath("/finance/forecast");
+  revalidatePath("/finance/profitability");
+  revalidatePath("/finance/invoices");
+
+  if (input.invoiceId) {
+    revalidatePath(`/finance/invoices/${input.invoiceId}`);
+    revalidatePath(`/finance/invoices/${input.invoiceId}/edit`);
+  }
+
+  if (input.includeExpenses) {
+    revalidatePath("/finance/expenses");
+  }
+}
+
 export async function createFinanceInvoiceAction(
   _prevState: FinanceActionState,
   formData: FormData,
@@ -246,16 +276,14 @@ export async function createFinanceInvoiceAction(
       fallbackSummary: `Invoice ${created.invoiceNumber} initialized.`,
     });
 
-    revalidatePath("/finance");
-    revalidatePath("/finance/invoices");
-    revalidatePath(`/finance/invoices/${created.id}`);
-    revalidatePath("/finance/ar");
     await runAlertChecksForInvoiceMutation({
       companyId: ctx.companyId,
       shipmentId: parsedHeader.shipmentId,
     });
-    revalidatePath("/dashboard");
-    revalidatePath("/dashboard/action-center");
+    revalidateCoreFinanceSurfaces({
+      shipmentId: parsedHeader.shipmentId,
+      invoiceId: created.id,
+    });
     return { success: true };
   } catch (error) {
     return {
@@ -455,17 +483,14 @@ export async function updateFinanceInvoiceAction(
       actor: getAuditActor(ctx),
     });
 
-    revalidatePath("/finance");
-    revalidatePath("/finance/invoices");
-    revalidatePath(`/finance/invoices/${invoiceId}`);
-    revalidatePath(`/finance/invoices/${invoiceId}/edit`);
-    revalidatePath("/finance/ar");
     await runAlertChecksForInvoiceMutation({
       companyId: ctx.companyId,
       shipmentId: parsedHeader.shipmentId,
     });
-    revalidatePath("/dashboard");
-    revalidatePath("/dashboard/action-center");
+    revalidateCoreFinanceSurfaces({
+      shipmentId: parsedHeader.shipmentId,
+      invoiceId,
+    });
     return { success: true };
   } catch (error) {
     return {
@@ -574,16 +599,14 @@ async function mutateInvoiceStatus(
         fallbackSummary: `Invoice ${after.invoiceNumber} updated.`,
       });
     }
-    revalidatePath("/finance/invoices");
-    revalidatePath(`/finance/invoices/${updated.id}`);
-    revalidatePath("/finance/ar");
-    revalidatePath(`/shipments/${updated.shipmentId}`);
     await runAlertChecksForInvoiceMutation({
       companyId: ctx.companyId,
       shipmentId: updated.shipmentId,
     });
-    revalidatePath("/dashboard");
-    revalidatePath("/dashboard/action-center");
+    revalidateCoreFinanceSurfaces({
+      shipmentId: updated.shipmentId,
+      invoiceId: updated.id,
+    });
     return { success: true };
   } catch (error) {
     return {
@@ -670,18 +693,14 @@ export async function registerFinanceInvoicePaymentAction(
       },
     });
 
-    revalidatePath("/finance");
-    revalidatePath("/finance/invoices");
-    revalidatePath(`/finance/invoices/${invoice.id}`);
-    revalidatePath("/finance/ar");
-    revalidatePath("/finance/forecast");
-    revalidatePath(`/shipments/${invoice.shipmentId}`);
     await runAlertChecksForInvoiceMutation({
       companyId: ctx.companyId,
       shipmentId: invoice.shipmentId,
     });
-    revalidatePath("/dashboard");
-    revalidatePath("/dashboard/action-center");
+    revalidateCoreFinanceSurfaces({
+      shipmentId: invoice.shipmentId,
+      invoiceId: invoice.id,
+    });
     return { success: true };
   } catch (error) {
     return {
@@ -754,12 +773,9 @@ export async function registerFinanceShipmentCostPaymentAction(
       shipmentId: cost.shipmentId,
     });
 
-    revalidatePath("/finance");
-    revalidatePath("/finance/ap");
-    revalidatePath("/finance/forecast");
-    revalidatePath(`/shipments/${cost.shipmentId}`);
-    revalidatePath("/dashboard");
-    revalidatePath("/dashboard/action-center");
+    revalidateCoreFinanceSurfaces({
+      shipmentId: cost.shipmentId,
+    });
     return { success: true };
   } catch (error) {
     return {
@@ -832,12 +848,9 @@ export async function registerFinanceExpensePaymentAction(
       shipmentId: expense.shipmentId,
     });
 
-    revalidatePath("/finance");
-    revalidatePath("/finance/ap");
-    revalidatePath("/finance/forecast");
-    revalidatePath(`/shipments/${expense.shipmentId}`);
-    revalidatePath("/dashboard");
-    revalidatePath("/dashboard/action-center");
+    revalidateCoreFinanceSurfaces({
+      shipmentId: expense.shipmentId,
+    });
     return { success: true };
   } catch (error) {
     return {
@@ -905,12 +918,9 @@ export async function registerFinanceGeneralExpensePaymentAction(
       },
     });
 
-    revalidatePath("/finance");
-    revalidatePath("/finance/ap");
-    revalidatePath("/finance/expenses");
-    revalidatePath("/finance/forecast");
-    revalidatePath("/dashboard");
-    revalidatePath("/dashboard/action-center");
+    revalidateCoreFinanceSurfaces({
+      includeExpenses: true,
+    });
     return { success: true };
   } catch (error) {
     return {
@@ -1048,10 +1058,9 @@ export async function upsertGeneralExpenseAction(
       });
     }
 
-    revalidatePath("/finance");
-    revalidatePath("/finance/expenses");
-    revalidatePath("/finance/ap");
-    revalidatePath("/finance/forecast");
+    revalidateCoreFinanceSurfaces({
+      includeExpenses: true,
+    });
     return { success: true };
   } catch (error) {
     return {
@@ -1097,10 +1106,9 @@ export async function deleteGeneralExpenseAction(
       before: existing as unknown as Record<string, unknown>,
       actor: getAuditActor(ctx),
     });
-    revalidatePath("/finance");
-    revalidatePath("/finance/expenses");
-    revalidatePath("/finance/ap");
-    revalidatePath("/finance/forecast");
+    revalidateCoreFinanceSurfaces({
+      includeExpenses: true,
+    });
     return { success: true };
   } catch (error) {
     return {
