@@ -167,7 +167,14 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
       code: row.code,
       actualAt: row.actualAt,
     })),
-    invoices: shipment.invoices.map((row) => ({ total: row.total })),
+    invoices: shipment.invoices.map((row) => ({
+      total: row.total,
+      status: row.status,
+    })),
+    revenues: shipment.revenues.map((row) => ({
+      amountBase: row.amountBase,
+      status: row.status,
+    })),
     shipmentCosts: shipment.shipmentCosts.map((row) => ({
       supplierName: row.supplierName,
       amount: row.amount,

@@ -152,6 +152,11 @@ async function getShipmentAlertSnapshots(where: { companyId: string; shipmentIds
           totalSell: true,
         },
       },
+      quotedMarginPercent: true,
+      quotedGrossProfit: true,
+      quotedSellAmount: true,
+      quotedCostAmount: true,
+      quoteSnapshot: true,
       milestones: {
         select: {
           code: true,
@@ -209,6 +214,11 @@ async function getShipmentAlertSnapshots(where: { companyId: string; shipmentIds
       masterRef: row.masterRef,
       updatedAt: row.updatedAt,
       quote: row.quote,
+      quotedMarginPercent: row.quotedMarginPercent,
+      quotedGrossProfit: row.quotedGrossProfit,
+      quotedSellAmount: row.quotedSellAmount,
+      quotedCostAmount: row.quotedCostAmount,
+      quoteSnapshot: row.quoteSnapshot,
       milestones: row.milestones,
       documents: row.documents,
       invoices: row.invoices,

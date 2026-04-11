@@ -1,4 +1,11 @@
-import { Prisma, type TradeDirection, type TransportMode } from "@prisma/client";
+import {
+  FinancialRecordStatus,
+  InvoiceStatus,
+  Prisma,
+  type TradeDirection,
+  type TransportMode,
+} from "@prisma/client";
+import { deriveShipmentFinancialTruth } from "@/lib/finance-truth";
 
 const DAY_MS = 1000 * 60 * 60 * 24;
 
@@ -94,7 +101,12 @@ type ShipmentLikeForContinuity = {
     actualAt: Date | null;
   }>;
   invoices: Array<{
+    status: InvoiceStatus;
     total: Prisma.Decimal | number | string;
+  }>;
+  revenues: Array<{
+    amountBase: Prisma.Decimal | number | string;
+    status: FinancialRecordStatus;
   }>;
   shipmentCosts: Array<{
     supplierName: string;
@@ -107,6 +119,24 @@ type ShipmentLikeForContinuity = {
     amountBase: Prisma.Decimal | number | string;
     concept: string;
   }>;
+  quote?: {
+    totalSell: Prisma.Decimal | number | string;
+    totalBuy: Prisma.Decimal | number | string;
+    marginAmount: Prisma.Decimal | number | string;
+    marginPct: Prisma.Decimal | number | string;
+    mode: TransportMode;
+    direction: TradeDirection;
+    originCode: string | null;
+    destinationCode: string | null;
+    pol: string | null;
+    pod: string | null;
+    estimatedTransitTimeDays?: number | null;
+    suggestedCarrier?: string | null;
+    suggestedSupplier?: string | null;
+    serviceLevelAssumption?: string | null;
+    routeAssumption?: string | null;
+    assumptionsNotes?: string | null;
+  } | null;
 };
 
 export type ShipmentQuoteContinuity = {
@@ -307,48 +337,84 @@ export function deriveQuotedVsActualMetrics(shipment: ShipmentLikeForContinuity)
     shipment.quoteSnapshot && typeof shipment.quoteSnapshot === "object"
       ? (shipment.quoteSnapshot as Record<string, unknown>)
       : null;
+  const canUseLiveQuoteFallback = !fallbackSnapshot;
 
   const quotedRevenue =
-    asNumber(shipment.quotedSellAmount) ?? asNumberishUnknown(fallbackSnapshot?.quotedSellAmount) ?? null;
+    asNumberishUnknown(fallbackSnapshot?.quotedSellAmount) ??
+    asNumber(shipment.quotedSellAmount) ??
+    (canUseLiveQuoteFallback ? asNumber(shipment.quote?.totalSell) : null) ??
+    null;
   const quotedCost =
-    asNumber(shipment.quotedCostAmount) ?? asNumberishUnknown(fallbackSnapshot?.quotedCostAmount) ?? null;
+    asNumberishUnknown(fallbackSnapshot?.quotedCostAmount) ??
+    asNumber(shipment.quotedCostAmount) ??
+    (canUseLiveQuoteFallback ? asNumber(shipment.quote?.totalBuy) : null) ??
+    null;
   const quotedGrossProfit =
-    asNumber(shipment.quotedGrossProfit) ?? asNumberishUnknown(fallbackSnapshot?.quotedGrossProfit) ?? null;
+    asNumberishUnknown(fallbackSnapshot?.quotedGrossProfit) ??
+    asNumber(shipment.quotedGrossProfit) ??
+    (canUseLiveQuoteFallback ? asNumber(shipment.quote?.marginAmount) : null) ??
+    null;
   const quotedMarginPercent =
-    asNumber(shipment.quotedMarginPercent) ??
     asNumberishUnknown(fallbackSnapshot?.quotedMarginPercent) ??
+    asNumber(shipment.quotedMarginPercent) ??
+    (canUseLiveQuoteFallback ? asQuotedMarginPercent(shipment.quote?.marginPct) : null) ??
     null;
   const quotedTransitTimeDays =
-    shipment.quotedTransitTimeDays ??
-    (asNumberishUnknown(fallbackSnapshot?.quotedTransitTimeDays) ?? null);
+    (asNumberishUnknown(fallbackSnapshot?.quotedTransitTimeDays) ?? shipment.quotedTransitTimeDays) ??
+    (canUseLiveQuoteFallback ? shipment.quote?.estimatedTransitTimeDays ?? null : null);
   const quotedOrigin =
-    shipment.quotedOrigin ??
-    (typeof fallbackSnapshot?.quotedOrigin === "string" ? fallbackSnapshot.quotedOrigin : null);
+    (typeof fallbackSnapshot?.quotedOrigin === "string" ? fallbackSnapshot.quotedOrigin : shipment.quotedOrigin) ??
+    (canUseLiveQuoteFallback ? shipment.quote?.originCode ?? shipment.quote?.pol ?? null : null);
   const quotedDestination =
-    shipment.quotedDestination ??
     (typeof fallbackSnapshot?.quotedDestination === "string"
       ? fallbackSnapshot.quotedDestination
+      : shipment.quotedDestination) ??
+    (canUseLiveQuoteFallback
+      ? shipment.quote?.destinationCode ?? shipment.quote?.pod ?? null
       : null);
   const quotedAssumptionsNotes =
-    shipment.quotedAssumptionsNotes ??
     (typeof fallbackSnapshot?.quotedAssumptionsNotes === "string"
       ? fallbackSnapshot.quotedAssumptionsNotes
-      : null);
+      : shipment.quotedAssumptionsNotes) ??
+    (canUseLiveQuoteFallback ? shipment.quote?.assumptionsNotes ?? null : null);
 
   const quotedChargeBreakdown =
-    parseQuotedChargeBreakdown(shipment.quotedChargeBreakdown) ||
-    parseQuotedChargeBreakdown(fallbackSnapshot?.quotedChargeBreakdown);
+    parseQuotedChargeBreakdown(fallbackSnapshot?.quotedChargeBreakdown).length > 0
+      ? parseQuotedChargeBreakdown(fallbackSnapshot?.quotedChargeBreakdown)
+      : parseQuotedChargeBreakdown(shipment.quotedChargeBreakdown);
   const supplierSuggestions =
+    parseSupplierSuggestions(fallbackSnapshot?.quotedSupplierSuggestions) ??
     parseSupplierSuggestions(shipment.quotedSupplierSuggestions) ??
-    parseSupplierSuggestions(fallbackSnapshot?.quotedSupplierSuggestions);
+    (canUseLiveQuoteFallback
+      ? {
+          suggestedCarrier: shipment.quote?.suggestedCarrier ?? null,
+          suggestedSupplier: shipment.quote?.suggestedSupplier ?? null,
+          serviceLevelAssumption: shipment.quote?.serviceLevelAssumption ?? null,
+          routeAssumption: shipment.quote?.routeAssumption ?? null,
+        }
+      : null);
 
-  const actualRevenue = round2(shipment.invoices.reduce((sum, row) => sum + (asNumber(row.total) ?? 0), 0));
-  const actualCost = round2(
-    shipment.shipmentCosts.reduce((sum, row) => sum + (asNumber(row.amount) ?? 0), 0) +
-      shipment.expenses.reduce((sum, row) => sum + (asNumber(row.amountBase) ?? 0), 0),
-  );
-  const actualGrossProfit = round2(actualRevenue - actualCost);
-  const actualMarginPercent = actualRevenue > 0 ? round2((actualGrossProfit / actualRevenue) * 100) : null;
+  const financialTruth = deriveShipmentFinancialTruth({
+    invoices: shipment.invoices.map((row) => ({
+      total: row.total,
+      status: row.status,
+    })),
+    revenues: shipment.revenues.map((row) => ({
+      amountBase: row.amountBase,
+      status: row.status,
+    })),
+    shipmentCosts: shipment.shipmentCosts.map((row) => ({
+      amount: row.amount,
+    })),
+    expenses: shipment.expenses.map((row) => ({
+      amountBase: row.amountBase,
+      status: FinancialRecordStatus.PENDING,
+    })),
+  });
+  const actualRevenue = financialTruth.revenue;
+  const actualCost = financialTruth.cost;
+  const actualGrossProfit = financialTruth.grossProfit;
+  const actualMarginPercent = financialTruth.marginPercent;
   const actualTransitTimeDays = getActualTransitTimeDays({
     atd: shipment.atd,
     ata: shipment.ata,
@@ -396,9 +462,14 @@ export function deriveQuotedVsActualMetrics(shipment: ShipmentLikeForContinuity)
       grossProfit: quotedGrossProfit,
       marginPercent: quotedMarginPercent,
       transitTimeDays: quotedTransitTimeDays,
-      mode: shipment.quotedMode ?? (fallbackSnapshot?.quotedMode as string | null) ?? null,
+      mode:
+        (fallbackSnapshot?.quotedMode as string | null) ??
+        shipment.quotedMode ??
+        (canUseLiveQuoteFallback ? shipment.quote?.mode ?? null : null),
       direction:
-        shipment.quotedDirection ?? (fallbackSnapshot?.quotedDirection as string | null) ?? null,
+        (fallbackSnapshot?.quotedDirection as string | null) ??
+        shipment.quotedDirection ??
+        (canUseLiveQuoteFallback ? shipment.quote?.direction ?? null : null),
       origin: quotedOrigin,
       destination: quotedDestination,
       chargeBreakdown: quotedChargeBreakdown,

@@ -79,6 +79,11 @@ export type ShipmentAlertSnapshot = Pick<
 > & {
   customerId: string;
   customerName: string;
+  quotedSellAmount: unknown | null;
+  quotedCostAmount: unknown | null;
+  quotedGrossProfit: unknown | null;
+  quotedMarginPercent: unknown | null;
+  quoteSnapshot: unknown;
   quote: {
     marginAmount: unknown;
     totalSell: unknown;
@@ -210,7 +215,15 @@ export function evaluateShipmentAlerts(
   const invoiceTotal = financialTruth.revenue;
   const totalCosts = financialTruth.cost;
   const actualMargin = financialTruth.grossProfit;
-  const quotedMargin = shipment.quote ? asNumber(shipment.quote.marginAmount) : 0;
+  const snapshotQuotedMargin =
+    shipment.quotedGrossProfit !== null && shipment.quotedGrossProfit !== undefined
+      ? asNumber(shipment.quotedGrossProfit)
+      : shipment.quoteSnapshot && typeof shipment.quoteSnapshot === "object"
+        ? asNumber((shipment.quoteSnapshot as Record<string, unknown>).quotedGrossProfit)
+        : null;
+  const quotedMargin =
+    snapshotQuotedMargin ??
+    (shipment.quote ? asNumber(shipment.quote.marginAmount) : 0);
   const derivedStageIndex = SHIPMENT_STAGE_INDEX[derivedState.masterStatus];
   const rawStageIndex = SHIPMENT_STAGE_INDEX[shipment.status];
 
