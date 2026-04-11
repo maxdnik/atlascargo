@@ -2,7 +2,7 @@ import {
   ActivityAction,
   ActivityActorType,
   EntityType,
-  type Prisma,
+  Prisma,
   type User,
 } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
@@ -78,7 +78,7 @@ type ListAuditHistoryInput = {
   limit?: number;
 };
 
-function jsonSafeValue(value: unknown): Prisma.InputJsonValue {
+function jsonSafeValue(value: unknown): Prisma.InputJsonValue | null {
   if (value === null || value === undefined) return null;
   if (typeof value === "string" || typeof value === "boolean") return value;
   if (typeof value === "number") return Number.isFinite(value) ? value : String(value);
@@ -92,27 +92,27 @@ function jsonSafeValue(value: unknown): Prisma.InputJsonValue {
     if ("toString" in (value as Record<string, unknown>) && (value as { constructor?: { name?: string } }).constructor?.name === "Decimal") {
       return String(value);
     }
-    const result: Record<string, Prisma.InputJsonValue> = {};
+    const result: Record<string, Prisma.InputJsonValue | null> = {};
     for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
       result[key] = jsonSafeValue(nested);
     }
-    return result;
+    return result as Prisma.InputJsonObject;
   }
   return String(value);
 }
 
-function stableSortJson(value: Prisma.InputJsonValue): Prisma.InputJsonValue {
+function stableSortJson(value: Prisma.InputJsonValue | null): Prisma.InputJsonValue | null {
   if (Array.isArray(value)) {
-    return value.map((item) => stableSortJson(item));
+    return value.map((item) => stableSortJson(item)) as Prisma.InputJsonArray;
   }
   if (value && typeof value === "object") {
     const sortedKeys = Object.keys(value).sort();
-    const sorted: Record<string, Prisma.InputJsonValue> = {};
+    const sorted: Record<string, Prisma.InputJsonValue | null> = {};
     for (const key of sortedKeys) {
-      const nested = (value as Record<string, Prisma.InputJsonValue>)[key];
+      const nested = (value as Record<string, Prisma.InputJsonValue | null>)[key];
       sorted[key] = stableSortJson(nested);
     }
-    return sorted;
+    return sorted as Prisma.InputJsonObject;
   }
   return value;
 }
@@ -190,9 +190,15 @@ export async function recordAuditEvent(
       oldValue: input.oldValue ?? null,
       newValue: input.newValue ?? null,
       summary: input.summary ?? null,
-      metadata: input.metadata ? (jsonSafeValue(input.metadata) as Prisma.InputJsonValue) : null,
-      beforeJson: input.before ? (jsonSafeValue(input.before) as Prisma.InputJsonValue) : null,
-      afterJson: input.after ? (jsonSafeValue(input.after) as Prisma.InputJsonValue) : null,
+      metadata: input.metadata
+        ? ((jsonSafeValue(input.metadata) ?? Prisma.JsonNull) as Prisma.InputJsonValue | Prisma.NullTypes.JsonNull)
+        : Prisma.DbNull,
+      beforeJson: input.before
+        ? ((jsonSafeValue(input.before) ?? Prisma.JsonNull) as Prisma.InputJsonValue | Prisma.NullTypes.JsonNull)
+        : Prisma.DbNull,
+      afterJson: input.after
+        ? ((jsonSafeValue(input.after) ?? Prisma.JsonNull) as Prisma.InputJsonValue | Prisma.NullTypes.JsonNull)
+        : Prisma.DbNull,
       ip: actor.ip ?? null,
       userAgent: actor.userAgent ?? null,
     },
