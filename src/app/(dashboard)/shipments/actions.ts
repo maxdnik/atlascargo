@@ -692,6 +692,10 @@ export async function createShipmentAction(
       return shipment;
     });
 
+    await runAlertChecksForShipmentUpdate({
+      companyId: ctx.companyId,
+      shipmentId: created.id,
+    });
     await recordAuditEvent({
       companyId: ctx.companyId,
       entityType: EntityType.SHIPMENT,
@@ -709,10 +713,6 @@ export async function createShipmentAction(
     });
     revalidatePath("/shipments");
     revalidatePath("/dashboard");
-    await runAlertChecksForShipmentUpdate({
-      companyId: ctx.companyId,
-      shipmentId: created.id,
-    });
 
     return { success: true };
   } catch (error) {
@@ -916,6 +916,13 @@ export async function updateShipmentAction(
       return shipment;
     });
 
+    await handleShipmentSideEffects({
+      companyId: ctx.companyId,
+      shipmentId: updated.id,
+      includeStatusSync: true,
+      triggeredByUserId: ctx.userId,
+    });
+
     await recordEntityDiff({
       companyId: ctx.companyId,
       entityType: EntityType.SHIPMENT,
@@ -933,10 +940,6 @@ export async function updateShipmentAction(
     revalidatePath("/shipments");
     revalidatePath(`/shipments/${updated.id}`);
     revalidatePath("/dashboard");
-    await runAlertChecksForShipmentUpdate({
-      companyId: ctx.companyId,
-      shipmentId: updated.id,
-    });
 
     return { success: true };
   } catch (error) {
@@ -1142,6 +1145,28 @@ async function syncShipmentStatusWithAudit(input: {
       actorType: ActivityActorType.SYSTEM,
       actorName: "Shipment status sync",
     },
+  });
+}
+
+async function handleShipmentSideEffects(input: {
+  companyId: string;
+  shipmentId: string;
+  includeStatusSync?: boolean;
+  triggeredByUserId?: string;
+}) {
+  if (input.includeStatusSync) {
+    if (!input.triggeredByUserId) {
+      throw new Error("triggeredByUserId is required when includeStatusSync is true");
+    }
+    await syncShipmentStatusWithAudit({
+      companyId: input.companyId,
+      shipmentId: input.shipmentId,
+      triggeredByUserId: input.triggeredByUserId,
+    });
+  }
+  await runAlertChecksForShipmentUpdate({
+    companyId: input.companyId,
+    shipmentId: input.shipmentId,
   });
 }
 
@@ -1405,6 +1430,8 @@ export async function upsertRevenueAction(
       notes: normalizeOptional(parsed.notes),
     };
 
+    let runRevenueAudit: (() => Promise<void>) | null = null;
+
     if (parsed.id) {
       const existing = await prisma.revenue.findFirst({
         where: {
@@ -1430,41 +1457,52 @@ export async function upsertRevenueAction(
         where: { id: existing.id },
         data: payload,
       });
-      await recordEntityDiff({
-        companyId: ctx.companyId,
-        entityType: EntityType.REVENUE,
-        entityId: existing.id,
-        shipmentId: shipment.id,
-        customerId: shipment.customerId,
-        before: existing as unknown as Record<string, unknown>,
-        after: updated as unknown as Record<string, unknown>,
-        trackedFields: [
-          "concept",
-          "amount",
-          "currencyCode",
-          "exchangeRate",
-          "amountBase",
-          "dueDate",
-          "status",
-          "notes",
-        ],
-        actor: getAuditActor(ctx),
-      });
+      runRevenueAudit = async () => {
+        await recordEntityDiff({
+          companyId: ctx.companyId,
+          entityType: EntityType.REVENUE,
+          entityId: existing.id,
+          shipmentId: shipment.id,
+          customerId: shipment.customerId,
+          before: existing as unknown as Record<string, unknown>,
+          after: updated as unknown as Record<string, unknown>,
+          trackedFields: [
+            "concept",
+            "amount",
+            "currencyCode",
+            "exchangeRate",
+            "amountBase",
+            "dueDate",
+            "status",
+            "notes",
+          ],
+          actor: getAuditActor(ctx),
+        });
+      };
     } else {
       const created = await prisma.revenue.create({ data: payload });
-      await recordAuditEvent({
-        companyId: ctx.companyId,
-        entityType: EntityType.REVENUE,
-        entityId: created.id,
-        action: ActivityAction.CREATE,
-        shipmentId: shipment.id,
-        customerId: shipment.customerId,
-        summary: `Revenue ${created.concept} created.`,
-        after: created as unknown as Record<string, unknown>,
-        actor: getAuditActor(ctx),
-      });
+      runRevenueAudit = async () => {
+        await recordAuditEvent({
+          companyId: ctx.companyId,
+          entityType: EntityType.REVENUE,
+          entityId: created.id,
+          action: ActivityAction.CREATE,
+          shipmentId: shipment.id,
+          customerId: shipment.customerId,
+          summary: `Revenue ${created.concept} created.`,
+          after: created as unknown as Record<string, unknown>,
+          actor: getAuditActor(ctx),
+        });
+      };
     }
 
+    await handleShipmentSideEffects({
+      companyId: ctx.companyId,
+      shipmentId: shipment.id,
+    });
+    if (runRevenueAudit) {
+      await runRevenueAudit();
+    }
     revalidatePath(`/shipments/${shipment.id}`);
     revalidatePath("/shipments");
     return { success: true };
@@ -1512,6 +1550,10 @@ export async function deleteRevenueAction(
     }
 
     await prisma.revenue.delete({ where: { id: existing.id } });
+    await handleShipmentSideEffects({
+      companyId: ctx.companyId,
+      shipmentId: existing.shipmentId,
+    });
     await recordAuditEvent({
       companyId: ctx.companyId,
       entityType: EntityType.REVENUE,
@@ -1581,6 +1623,8 @@ export async function upsertExpenseAction(
       notes: normalizeOptional(parsed.notes),
     };
 
+    let runExpenseAudit: (() => Promise<void>) | null = null;
+
     if (parsed.id) {
       const existing = await prisma.expense.findFirst({
         where: {
@@ -1608,42 +1652,53 @@ export async function upsertExpenseAction(
         where: { id: existing.id },
         data: payload,
       });
-      await recordEntityDiff({
-        companyId: ctx.companyId,
-        entityType: EntityType.EXPENSE,
-        entityId: existing.id,
-        shipmentId: shipment.id,
-        customerId: shipment.customerId,
-        before: existing as unknown as Record<string, unknown>,
-        after: updated as unknown as Record<string, unknown>,
-        trackedFields: [
-          "supplierName",
-          "concept",
-          "amount",
-          "currencyCode",
-          "exchangeRate",
-          "amountBase",
-          "dueDate",
-          "status",
-          "notes",
-        ],
-        actor: getAuditActor(ctx),
-      });
+      runExpenseAudit = async () => {
+        await recordEntityDiff({
+          companyId: ctx.companyId,
+          entityType: EntityType.EXPENSE,
+          entityId: existing.id,
+          shipmentId: shipment.id,
+          customerId: shipment.customerId,
+          before: existing as unknown as Record<string, unknown>,
+          after: updated as unknown as Record<string, unknown>,
+          trackedFields: [
+            "supplierName",
+            "concept",
+            "amount",
+            "currencyCode",
+            "exchangeRate",
+            "amountBase",
+            "dueDate",
+            "status",
+            "notes",
+          ],
+          actor: getAuditActor(ctx),
+        });
+      };
     } else {
       const created = await prisma.expense.create({ data: payload });
-      await recordAuditEvent({
-        companyId: ctx.companyId,
-        entityType: EntityType.EXPENSE,
-        entityId: created.id,
-        action: ActivityAction.CREATE,
-        shipmentId: shipment.id,
-        customerId: shipment.customerId,
-        summary: `Expense ${created.concept} created.`,
-        after: created as unknown as Record<string, unknown>,
-        actor: getAuditActor(ctx),
-      });
+      runExpenseAudit = async () => {
+        await recordAuditEvent({
+          companyId: ctx.companyId,
+          entityType: EntityType.EXPENSE,
+          entityId: created.id,
+          action: ActivityAction.CREATE,
+          shipmentId: shipment.id,
+          customerId: shipment.customerId,
+          summary: `Expense ${created.concept} created.`,
+          after: created as unknown as Record<string, unknown>,
+          actor: getAuditActor(ctx),
+        });
+      };
     }
 
+    await handleShipmentSideEffects({
+      companyId: ctx.companyId,
+      shipmentId: shipment.id,
+    });
+    if (runExpenseAudit) {
+      await runExpenseAudit();
+    }
     revalidatePath(`/shipments/${shipment.id}`);
     revalidatePath("/shipments");
     return { success: true };
@@ -1695,6 +1750,10 @@ export async function deleteExpenseAction(
     }
 
     await prisma.expense.delete({ where: { id: existing.id } });
+    await handleShipmentSideEffects({
+      companyId: ctx.companyId,
+      shipmentId: existing.shipmentId,
+    });
     await recordAuditEvent({
       companyId: ctx.companyId,
       entityType: EntityType.EXPENSE,
@@ -1761,6 +1820,8 @@ export async function upsertShipmentCostAction(
       notes: normalizeOptional(parsed.notes),
     };
 
+    let runShipmentCostAudit: (() => Promise<void>) | null = null;
+
     if (parsed.id) {
       const existing = await prisma.shipmentCost.findFirst({
         where: {
@@ -1787,41 +1848,52 @@ export async function upsertShipmentCostAction(
         where: { id: existing.id },
         data: payload,
       });
-      await recordEntityDiff({
-        companyId: ctx.companyId,
-        entityType: EntityType.SHIPMENT_COST,
-        entityId: existing.id,
-        shipmentId: shipment.id,
-        customerId: shipment.customerId,
-        before: existing as unknown as Record<string, unknown>,
-        after: updated as unknown as Record<string, unknown>,
-        trackedFields: [
-          "supplierName",
-          "conceptCategory",
-          "customConcept",
-          "amount",
-          "currencyCode",
-          "dueDate",
-          "status",
-          "notes",
-        ],
-        actor: getAuditActor(ctx),
-      });
+      runShipmentCostAudit = async () => {
+        await recordEntityDiff({
+          companyId: ctx.companyId,
+          entityType: EntityType.SHIPMENT_COST,
+          entityId: existing.id,
+          shipmentId: shipment.id,
+          customerId: shipment.customerId,
+          before: existing as unknown as Record<string, unknown>,
+          after: updated as unknown as Record<string, unknown>,
+          trackedFields: [
+            "supplierName",
+            "conceptCategory",
+            "customConcept",
+            "amount",
+            "currencyCode",
+            "dueDate",
+            "status",
+            "notes",
+          ],
+          actor: getAuditActor(ctx),
+        });
+      };
     } else {
       const created = await prisma.shipmentCost.create({ data: payload });
-      await recordAuditEvent({
-        companyId: ctx.companyId,
-        entityType: EntityType.SHIPMENT_COST,
-        entityId: created.id,
-        action: ActivityAction.CREATE,
-        shipmentId: shipment.id,
-        customerId: shipment.customerId,
-        summary: "Shipment cost created.",
-        after: created as unknown as Record<string, unknown>,
-        actor: getAuditActor(ctx),
-      });
+      runShipmentCostAudit = async () => {
+        await recordAuditEvent({
+          companyId: ctx.companyId,
+          entityType: EntityType.SHIPMENT_COST,
+          entityId: created.id,
+          action: ActivityAction.CREATE,
+          shipmentId: shipment.id,
+          customerId: shipment.customerId,
+          summary: "Shipment cost created.",
+          after: created as unknown as Record<string, unknown>,
+          actor: getAuditActor(ctx),
+        });
+      };
     }
 
+    await handleShipmentSideEffects({
+      companyId: ctx.companyId,
+      shipmentId: shipment.id,
+    });
+    if (runShipmentCostAudit) {
+      await runShipmentCostAudit();
+    }
     revalidatePath(`/shipments/${shipment.id}`);
     revalidatePath("/shipments");
     revalidatePath("/finance");
@@ -1878,6 +1950,10 @@ export async function deleteShipmentCostAction(
     }
 
     await prisma.shipmentCost.delete({ where: { id: existing.id } });
+    await handleShipmentSideEffects({
+      companyId: ctx.companyId,
+      shipmentId: existing.shipmentId,
+    });
     await recordAuditEvent({
       companyId: ctx.companyId,
       entityType: EntityType.SHIPMENT_COST,
@@ -2512,6 +2588,13 @@ export async function upsertMilestoneAction(
         comment: normalizedNotes,
       },
     });
+    await handleShipmentSideEffects({
+      companyId: ctx.companyId,
+      shipmentId: shipment.id,
+      includeStatusSync: true,
+      triggeredByUserId: ctx.userId,
+    });
+
     if (existing) {
       await recordEntityDiff({
         companyId: ctx.companyId,
@@ -2536,18 +2619,9 @@ export async function upsertMilestoneAction(
         actor: getAuditActor(ctx),
       });
     }
-    await syncShipmentStatusWithAudit({
-      companyId: ctx.companyId,
-      shipmentId: shipment.id,
-      triggeredByUserId: ctx.userId,
-    });
 
     revalidatePath(`/shipments/${shipment.id}`);
     revalidatePath("/shipments");
-    await runAlertChecksForShipmentUpdate({
-      companyId: ctx.companyId,
-      shipmentId: shipment.id,
-    });
     return { success: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
@@ -2681,6 +2755,10 @@ export async function createShipmentFromQuoteAction(
       return shipment;
     });
 
+    await runAlertChecksForShipmentUpdate({
+      companyId: ctx.companyId,
+      shipmentId: created.id,
+    });
     await recordAuditEvent({
       companyId: ctx.companyId,
       entityType: EntityType.SHIPMENT,
@@ -2715,11 +2793,6 @@ export async function createShipmentFromQuoteAction(
       },
       actor: getAuditActor(ctx),
     });
-    await runAlertChecksForShipmentUpdate({
-      companyId: ctx.companyId,
-      shipmentId: created.id,
-    });
-
     revalidatePath("/shipments");
     revalidatePath("/quotes");
     revalidatePath(`/shipments/${created.id}`);

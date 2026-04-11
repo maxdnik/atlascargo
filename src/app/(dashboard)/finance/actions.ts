@@ -14,7 +14,10 @@ import {
 import { z } from "zod";
 import { enforceActionPermission } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
-import { runAlertChecksForInvoiceMutation } from "@/lib/alerts";
+import {
+  runAlertChecksForInvoiceMutation,
+  runAlertChecksForShipmentUpdate,
+} from "@/lib/alerts";
 import { recordAuditEvent, recordEntityDiff } from "@/lib/audit";
 import { registerEntityPayment } from "@/lib/payments";
 import {
@@ -745,6 +748,10 @@ export async function registerFinanceShipmentCostPaymentAction(
       actor: {
         actorId: ctx.userId,
       },
+    });
+    await runAlertChecksForShipmentUpdate({
+      companyId: ctx.companyId,
+      shipmentId: cost.shipmentId,
     });
 
     revalidatePath("/finance");
