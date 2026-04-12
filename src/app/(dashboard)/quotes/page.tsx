@@ -1,7 +1,7 @@
 import Link from "next/link";
-import { QuoteStatus } from "@prisma/client";
+import { PermissionAction, PermissionResource, QuoteStatus } from "@prisma/client";
 import { ArrowRight, FileText, Plane, ShipWheel, Truck } from "lucide-react";
-import { enforcePagePermission } from "@/lib/permissions";
+import { canUser, enforcePagePermission } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 
 function statusBadgeClass(status: QuoteStatus) {
@@ -14,6 +14,15 @@ function statusBadgeClass(status: QuoteStatus) {
 
 export default async function QuotesPage() {
   const session = await enforcePagePermission("QUOTES", "VIEW");
+  const canCreateQuotes = await canUser(
+    {
+      id: session.userId,
+      role: session.role,
+      companyId: session.companyId,
+    },
+    PermissionResource.QUOTES,
+    PermissionAction.CREATE,
+  );
 
   const quotes = await prisma.quote.findMany({
     where: { companyId: session.companyId },
@@ -49,6 +58,14 @@ export default async function QuotesPage() {
             Commercial opportunities and conversion into operational files.
           </p>
         </div>
+        {canCreateQuotes ? (
+          <Link
+            href="/quotes/new"
+            className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-sky-500"
+          >
+            New Quote
+          </Link>
+        ) : null}
       </div>
 
       <div className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-sm">
