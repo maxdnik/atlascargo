@@ -139,7 +139,7 @@ export function QuoteForm({
       <section className="space-y-3">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-700">Core quote data</h2>
         <p className="text-xs text-slate-500">
-          Start with a lightweight draft: customer, mode, direction, origin, destination, and pricing lines.
+          Start with a lightweight draft: customer, mode, direction, origin, and destination.
         </p>
         <div className="grid gap-4 md:grid-cols-2">
           <div>
@@ -406,7 +406,7 @@ export function QuoteForm({
           </button>
         </div>
         <p className="text-xs text-slate-500">
-          Tip: you can save a draft with just one basic charge line and complete details later.
+          Tip: you can save a draft without pricing and complete charges later.
         </p>
 
         <input type="hidden" name="chargesJson" value={chargesPayload} />
@@ -418,7 +418,7 @@ export function QuoteForm({
               className="grid gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 md:grid-cols-12"
             >
               <div className="md:col-span-3">
-                <label className="mb-1 block text-xs font-medium text-slate-600">Concept *</label>
+                <label className="mb-1 block text-xs font-medium text-slate-600">Concept</label>
                 <input
                   value={charge.concept}
                   onChange={(event) => updateCharge(charge.id, "concept", event.target.value)}
@@ -436,7 +436,7 @@ export function QuoteForm({
                 />
               </div>
               <div className="md:col-span-2">
-                <label className="mb-1 block text-xs font-medium text-slate-600">Buy *</label>
+                <label className="mb-1 block text-xs font-medium text-slate-600">Buy</label>
                 <input
                   type="number"
                   min={0}
@@ -447,7 +447,7 @@ export function QuoteForm({
                 />
               </div>
               <div className="md:col-span-2">
-                <label className="mb-1 block text-xs font-medium text-slate-600">Sell *</label>
+                <label className="mb-1 block text-xs font-medium text-slate-600">Sell</label>
                 <input
                   type="number"
                   min={0}
@@ -458,7 +458,7 @@ export function QuoteForm({
                 />
               </div>
               <div className="md:col-span-2">
-                <label className="mb-1 block text-xs font-medium text-slate-600">Currency *</label>
+                <label className="mb-1 block text-xs font-medium text-slate-600">Currency</label>
                 <select
                   value={charge.currencyCode}
                   onChange={(event) => updateCharge(charge.id, "currencyCode", event.target.value)}
