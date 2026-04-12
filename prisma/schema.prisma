@@ -73,6 +73,30 @@ enum QuoteStatus {
   EXPIRED
 }
 
+enum QuoteLoadType {
+  FCL
+  LCL
+  STANDARD
+  EXPRESS
+  FTL
+  LTL
+  OTHER
+}
+
+enum QuoteServiceScope {
+  PORT_TO_PORT
+  DOOR_TO_PORT
+  PORT_TO_DOOR
+  DOOR_TO_DOOR
+}
+
+enum QuoteCustomsClearanceScope {
+  NONE
+  ORIGIN
+  DESTINATION
+  BOTH
+}
+
 enum MilestoneStatus {
   PENDING
   IN_PROGRESS
@@ -586,6 +610,17 @@ model Quote {
   airportDestination String?
   placeOfReceipt String?
   placeOfDelivery String?
+  loadType      QuoteLoadType?
+  packageCount  Int?
+  packageType   String?
+  grossWeightKg Decimal?
+  volumeM3      Decimal?
+  cargoReadyDate DateTime?
+  serviceScope  QuoteServiceScope?
+  customerReference String?
+  insuranceRequired Boolean @default(false)
+  customsClearanceScope QuoteCustomsClearanceScope @default(NONE)
+  equipmentType String?
   commodity     String?
   validUntil    DateTime?
   currencyCode  String
@@ -637,6 +672,7 @@ model QuoteCharge {
   quoteId      String
   concept      String
   chargeType   String?
+  providerName String?
   buyAmount    Decimal  @default(0)
   sellAmount   Decimal  @default(0)
   currencyCode String

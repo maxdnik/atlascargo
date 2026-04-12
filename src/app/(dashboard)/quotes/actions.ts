@@ -1,7 +1,15 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { Prisma, QuoteStatus, TradeDirection, TransportMode } from "@prisma/client";
+import {
+  Prisma,
+  QuoteCustomsClearanceScope,
+  QuoteLoadType,
+  QuoteServiceScope,
+  QuoteStatus,
+  TradeDirection,
+  TransportMode,
+} from "@prisma/client";
 import { z } from "zod";
 
 import { enforceActionPermission } from "@/lib/permissions";
@@ -12,12 +20,24 @@ const quoteCreateSchema = z.object({
   mode: z.nativeEnum(TransportMode),
   direction: z.nativeEnum(TradeDirection),
   currencyCode: z.string().trim().min(1, "Currency is required"),
+  loadType: z.nativeEnum(QuoteLoadType),
+  packageCount: z.coerce.number().int().min(1).max(1_000_000),
+  packageType: z.string().trim().min(1).max(80),
+  grossWeightKg: z.coerce.number().positive().max(10_000_000),
+  volumeM3: z.coerce.number().positive().max(100_000),
+  cargoReadyDate: z.string(),
+  serviceScope: z.nativeEnum(QuoteServiceScope),
+  customerReference: z.string().trim().max(80).optional(),
+  insuranceRequired: z.boolean().default(false),
+  customsClearanceScope: z.nativeEnum(QuoteCustomsClearanceScope),
+  equipmentType: z.string().trim().max(80).optional(),
   incotermCode: z.string().trim().max(10).optional(),
   originCode: z.string().trim().max(32).optional(),
   destinationCode: z.string().trim().max(32).optional(),
   validUntil: z.string().optional(),
   commodity: z.string().trim().max(160).optional(),
   internalNotes: z.string().trim().max(1000).optional(),
+  chargesJson: z.string().trim().min(2, "At least one charge is required"),
 });
 
 export type QuoteActionState = {
@@ -40,6 +60,54 @@ function parseDate(value?: string) {
     throw new Error("Invalid date value");
   }
   return parsed;
+}
+
+type QuoteChargeInput = {
+  concept: string;
+  providerName?: string;
+  buyAmount: number;
+  sellAmount: number;
+  currencyCode: string;
+};
+
+function parseCharges(raw: string) {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("Invalid charges payload");
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0) {
+    throw new Error("At least one charge is required");
+  }
+
+  const rows: QuoteChargeInput[] = parsed.map((row) => {
+    if (!row || typeof row !== "object") {
+      throw new Error("Invalid charge row");
+    }
+    const record = row as Record<string, unknown>;
+    const concept = typeof record.concept === "string" ? record.concept.trim() : "";
+    const providerName = typeof record.providerName === "string" ? record.providerName.trim() : "";
+    const buyAmount = Number(record.buyAmount);
+    const sellAmount = Number(record.sellAmount);
+    const currencyCode =
+      typeof record.currencyCode === "string" ? record.currencyCode.trim().toUpperCase() : "";
+
+    if (!concept) throw new Error("Each charge requires a concept");
+    if (!Number.isFinite(buyAmount) || buyAmount < 0) throw new Error("Invalid buy amount");
+    if (!Number.isFinite(sellAmount) || sellAmount < 0) throw new Error("Invalid sell amount");
+    if (!currencyCode) throw new Error("Invalid charge currency");
+
+    return {
+      concept,
+      providerName: providerName || undefined,
+      buyAmount,
+      sellAmount,
+      currencyCode,
+    };
+  });
+
+  return rows;
 }
 
 async function nextQuoteNumber(tx: Prisma.TransactionClient, companyId: string) {
@@ -104,6 +172,9 @@ function safeQuoteError(error: unknown) {
     if (error.message === "Invalid incoterm") {
       return "Unable to create quote because the selected incoterm is invalid.";
     }
+    if (error.message.includes("charge")) {
+      return "Unable to create quote because one or more pricing rows are invalid.";
+    }
   }
   return "Unable to create quote right now. Please try again.";
 }
@@ -119,17 +190,31 @@ export async function createQuoteAction(
       mode: formData.get("mode"),
       direction: formData.get("direction"),
       currencyCode: formData.get("currencyCode"),
+      loadType: formData.get("loadType"),
+      packageCount: formData.get("packageCount"),
+      packageType: formData.get("packageType"),
+      grossWeightKg: formData.get("grossWeightKg"),
+      volumeM3: formData.get("volumeM3"),
+      cargoReadyDate: String(formData.get("cargoReadyDate") || ""),
+      serviceScope: formData.get("serviceScope"),
+      customerReference: formData.get("customerReference") || undefined,
+      insuranceRequired: formData.get("insuranceRequired") === "on",
+      customsClearanceScope: formData.get("customsClearanceScope"),
+      equipmentType: formData.get("equipmentType") || undefined,
       incotermCode: formData.get("incotermCode") || undefined,
       originCode: formData.get("originCode") || undefined,
       destinationCode: formData.get("destinationCode") || undefined,
       validUntil: String(formData.get("validUntil") || ""),
       commodity: formData.get("commodity") || undefined,
       internalNotes: formData.get("internalNotes") || undefined,
+      chargesJson: String(formData.get("chargesJson") || ""),
     });
 
     const validUntil = parseDate(parsed.validUntil);
+    const cargoReadyDate = parseDate(parsed.cargoReadyDate);
     const currencyCode = parsed.currencyCode.trim().toUpperCase();
     const incotermCode = normalizeOptional(parsed.incotermCode)?.toUpperCase();
+    const charges = parseCharges(parsed.chargesJson);
 
     const created = await prisma.$transaction(async (tx) => {
       const [customer, currency, incoterm] = await Promise.all([
@@ -163,7 +248,12 @@ export async function createQuoteAction(
       }
 
       const quoteNumber = await nextQuoteNumber(tx, ctx.companyId);
-      return tx.quote.create({
+      const totalBuy = charges.reduce((sum, row) => sum + row.buyAmount, 0);
+      const totalSell = charges.reduce((sum, row) => sum + row.sellAmount, 0);
+      const marginAmount = totalSell - totalBuy;
+      const marginPct = totalSell > 0 ? (marginAmount / totalSell) * 100 : 0;
+
+      const created = await tx.quote.create({
         data: {
           companyId: ctx.companyId,
           branchId: ctx.branchId ?? undefined,
@@ -176,12 +266,42 @@ export async function createQuoteAction(
           incotermCode: incotermCode ?? undefined,
           originCode: normalizeOptional(parsed.originCode)?.toUpperCase(),
           destinationCode: normalizeOptional(parsed.destinationCode)?.toUpperCase(),
+          loadType: parsed.loadType,
+          packageCount: parsed.packageCount,
+          packageType: parsed.packageType.trim(),
+          grossWeightKg: parsed.grossWeightKg,
+          volumeM3: parsed.volumeM3,
+          cargoReadyDate: cargoReadyDate ?? undefined,
+          serviceScope: parsed.serviceScope,
+          customerReference: normalizeOptional(parsed.customerReference),
+          insuranceRequired: parsed.insuranceRequired,
+          customsClearanceScope: parsed.customsClearanceScope,
+          equipmentType: normalizeOptional(parsed.equipmentType),
           commodity: normalizeOptional(parsed.commodity),
           validUntil,
           currencyCode,
+          totalBuy,
+          totalSell,
+          marginAmount,
+          marginPct,
           internalNotes: normalizeOptional(parsed.internalNotes),
         },
       });
+
+      if (charges.length > 0) {
+        await tx.quoteCharge.createMany({
+          data: charges.map((row) => ({
+            quoteId: created.id,
+            concept: row.concept,
+            providerName: row.providerName ?? null,
+            buyAmount: row.buyAmount,
+            sellAmount: row.sellAmount,
+            currencyCode: row.currencyCode,
+          })),
+        });
+      }
+
+      return created;
     });
 
     await prisma.activityLog.create({

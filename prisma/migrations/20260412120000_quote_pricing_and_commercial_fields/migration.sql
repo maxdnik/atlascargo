@@ -1,0 +1,12 @@
+ALTER TABLE "Quote" ADD COLUMN "loadType" TEXT;
+ALTER TABLE "Quote" ADD COLUMN "packageCount" INTEGER;
+ALTER TABLE "Quote" ADD COLUMN "packageType" TEXT;
+ALTER TABLE "Quote" ADD COLUMN "grossWeightKg" DECIMAL;
+ALTER TABLE "Quote" ADD COLUMN "volumeM3" DECIMAL;
+ALTER TABLE "Quote" ADD COLUMN "cargoReadyDate" DATETIME;
+ALTER TABLE "Quote" ADD COLUMN "serviceScope" TEXT;
+ALTER TABLE "Quote" ADD COLUMN "customerReference" TEXT;
+ALTER TABLE "Quote" ADD COLUMN "insuranceRequired" BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE "Quote" ADD COLUMN "customsClearanceScope" TEXT NOT NULL DEFAULT 'NONE';
+ALTER TABLE "Quote" ADD COLUMN "equipmentType" TEXT;
+ALTER TABLE "QuoteCharge" ADD COLUMN "providerName" TEXT;
