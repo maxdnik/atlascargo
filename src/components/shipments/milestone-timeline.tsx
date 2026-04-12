@@ -7,12 +7,12 @@ import {
   upsertMilestoneAction,
   type ShipmentActionState,
 } from "@/app/(dashboard)/shipments/actions";
+import { sortShipmentMilestones } from "@/lib/shipment-milestones";
 
 type MilestoneRow = {
   id: string;
   code: string;
   label: string;
-  expectedAt: string | null;
   actualAt: string | null;
   status: MilestoneStatus;
   comment: string | null;
@@ -26,7 +26,7 @@ type MilestoneTimelineProps = {
 const initialState: ShipmentActionState = { success: false };
 
 function formatDate(value: string | null) {
-  if (!value) return "-";
+  if (!value) return "No date recorded";
   return new Date(value).toLocaleString();
 }
 
@@ -56,12 +56,9 @@ function MilestoneRowForm({
     <form action={action} className="space-y-3 rounded-md border border-slate-200 bg-white p-3">
       <input type="hidden" name="shipmentId" value={shipmentId} />
       <input type="hidden" name="code" value={milestone.code} />
-      <input type="hidden" name="label" value={milestone.label} />
-
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <p className="text-sm font-semibold text-slate-900">{milestone.label}</p>
-          <p className="text-xs text-slate-500">{milestone.code}</p>
         </div>
         <span
           className={`inline-flex rounded-full px-2.5 py-1 text-xs font-medium ${milestoneBadgeClass(
@@ -72,17 +69,7 @@ function MilestoneRowForm({
         </span>
       </div>
 
-      <div className="grid gap-3 md:grid-cols-3">
-        <div>
-          <label className="mb-1 block text-xs font-medium text-slate-600">Expected</label>
-          <input
-            type="datetime-local"
-            name="expectedAt"
-            defaultValue={toInputValue(milestone.expectedAt)}
-            className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-          />
-          <p className="mt-1 text-xs text-slate-500">Current: {formatDate(milestone.expectedAt)}</p>
-        </div>
+      <div className="grid gap-3 md:grid-cols-2">
         <div>
           <label className="mb-1 block text-xs font-medium text-slate-600">Actual</label>
           <input
@@ -136,9 +123,11 @@ export function MilestoneTimeline({ shipmentId, milestones }: MilestoneTimelineP
     return <p className="text-sm text-slate-500">No milestones configured for this shipment.</p>;
   }
 
+  const orderedMilestones = sortShipmentMilestones(milestones);
+
   return (
     <div className="space-y-3">
-      {milestones.map((milestone) => (
+      {orderedMilestones.map((milestone) => (
         <MilestoneRowForm key={milestone.id} shipmentId={shipmentId} milestone={milestone} />
       ))}
     </div>

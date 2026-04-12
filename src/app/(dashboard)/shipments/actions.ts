@@ -19,6 +19,11 @@ import {
 import { enforceActionPermission } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import {
+  getShipmentMilestoneLabel,
+  isCriticalShipmentMilestone,
+  SHIPMENT_MILESTONE_WORKFLOW,
+} from "@/lib/shipment-milestones";
+import {
   addInvoiceLine,
   cancelInvoice,
   createInvoiceForShipment,
@@ -98,17 +103,31 @@ const financialStatusOptions = Object.values(FinancialRecordStatus);
 const documentStatusOptions = Object.values(DocumentRecordStatus);
 const documentTypeOptions = Object.values(DocumentType);
 
-const defaultMilestones: Array<{ code: string; label: string; isCritical: boolean }> = [
-  { code: "QUOTE_APPROVED", label: "Quote Approved", isCritical: false },
-  { code: "BOOKING_REQUESTED", label: "Booking Requested", isCritical: true },
-  { code: "BOOKING_CONFIRMED", label: "Booking Confirmed", isCritical: true },
-  { code: "CARGO_READY", label: "Cargo Ready", isCritical: true },
-  { code: "DEPARTED", label: "Departed", isCritical: true },
-  { code: "ARRIVED", label: "Arrived", isCritical: true },
-  { code: "CUSTOMS_IN_PROGRESS", label: "Customs In Progress", isCritical: false },
-  { code: "DELIVERED", label: "Delivered", isCritical: true },
-  { code: "CLOSED", label: "Closed", isCritical: true },
-];
+const defaultMilestones = SHIPMENT_MILESTONE_WORKFLOW;
+
+function parseOperationalDates(input: {
+  cargoReadyDate?: string;
+  etd?: string;
+  eta?: string;
+  atd?: string;
+  ata?: string;
+  deliveredAt?: string;
+}) {
+  const cargoReadyDate = toDate(input.cargoReadyDate);
+  const etd = toDate(input.etd);
+  const eta = toDate(input.eta);
+  const atd = toDate(input.atd);
+  const ata = toDate(input.ata);
+  const deliveredAt = toDate(input.deliveredAt);
+  return {
+    cargoReadyDate,
+    etd,
+    eta,
+    atd,
+    ata,
+    deliveredAt,
+  };
+}
 
 function normalizeOptional(value?: string | null) {
   if (!value) return null;
@@ -259,11 +278,7 @@ function milestoneSeedData(shipmentId: string, dates: MilestoneDates) {
 function validateOperationalStatusRules(
   status: ShipmentStatus,
   dates: {
-    atd: Date | null;
     deliveredAt: Date | null;
-    etd: Date | null;
-    eta: Date | null;
-    ata: Date | null;
   },
   refs: {
     bookingRef: string | null;
@@ -271,17 +286,13 @@ function validateOperationalStatusRules(
     masterRef: string | null;
   },
 ) {
-  if (status === ShipmentStatus.IN_TRANSIT && !dates.atd) {
-    throw new Error("IN_TRANSIT requires ATD operational confirmation");
-  }
-
   if (status === ShipmentStatus.DELIVERED && !dates.deliveredAt) {
     throw new Error("DELIVERED requires Delivered At date");
   }
 
   if (status === ShipmentStatus.CLOSED) {
-    if (!dates.atd || !dates.ata || !dates.deliveredAt) {
-      throw new Error("CLOSED requires ATD, ATA and Delivered At dates");
+    if (!dates.deliveredAt) {
+      throw new Error("CLOSED requires Delivered At date");
     }
     if (!refs.bookingRef || (!refs.houseRef && !refs.masterRef)) {
       throw new Error("CLOSED requires booking reference and house/master reference");
@@ -410,12 +421,14 @@ export async function createShipmentAction(
     });
 
     const quoteId = normalizeOptional(parsed.quoteId);
-    const cargoReadyDate = toDate(parsed.cargoReadyDate);
-    const etd = toDate(parsed.etd);
-    const eta = toDate(parsed.eta);
-    const atd = toDate(parsed.atd);
-    const ata = toDate(parsed.ata);
-    const deliveredAt = toDate(parsed.deliveredAt);
+    const { cargoReadyDate, etd, eta, atd, ata, deliveredAt } = parseOperationalDates({
+      cargoReadyDate: parsed.cargoReadyDate,
+      etd: parsed.etd,
+      eta: parsed.eta,
+      atd: parsed.atd,
+      ata: parsed.ata,
+      deliveredAt: parsed.deliveredAt,
+    });
     validateShipmentDates({ cargoReadyDate, etd, eta, atd, ata, deliveredAt });
 
     let approvedQuote:
@@ -505,7 +518,7 @@ export async function createShipmentAction(
 
     validateOperationalStatusRules(
       parsed.status,
-      { atd, deliveredAt, etd, eta, ata },
+      { deliveredAt },
       normalizedRefs,
     );
 
@@ -669,12 +682,31 @@ export async function updateShipmentAction(
       notes: formData.get("notes") || undefined,
     });
 
-    const cargoReadyDate = toDate(parsed.cargoReadyDate);
-    const etd = toDate(parsed.etd);
-    const eta = toDate(parsed.eta);
-    const atd = toDate(parsed.atd);
-    const ata = toDate(parsed.ata);
-    const deliveredAt = toDate(parsed.deliveredAt);
+    const before = await prisma.shipment.findFirst({
+      where: {
+        id,
+        companyId: ctx.companyId,
+      },
+    });
+
+    if (!before) {
+      throw new Error("Shipment not found");
+    }
+
+    const parsedDates = parseOperationalDates({
+      cargoReadyDate: parsed.cargoReadyDate,
+      etd: parsed.etd,
+      eta: parsed.eta,
+      atd: parsed.atd,
+      ata: parsed.ata,
+      deliveredAt: parsed.deliveredAt,
+    });
+    const cargoReadyDate = parsedDates.cargoReadyDate;
+    const etd = parsedDates.etd;
+    const eta = parsedDates.eta;
+    const atd = formData.has("atd") ? parsedDates.atd : before.atd;
+    const ata = formData.has("ata") ? parsedDates.ata : before.ata;
+    const deliveredAt = parsedDates.deliveredAt;
     validateShipmentDates({ cargoReadyDate, etd, eta, atd, ata, deliveredAt });
 
     const customer = await prisma.customer.findFirst({
@@ -697,20 +729,9 @@ export async function updateShipmentAction(
 
     validateOperationalStatusRules(
       parsed.status,
-      { atd, deliveredAt, etd, eta, ata },
+      { deliveredAt },
       normalizedRefs,
     );
-
-    const before = await prisma.shipment.findFirst({
-      where: {
-        id,
-        companyId: ctx.companyId,
-      },
-    });
-
-    if (!before) {
-      throw new Error("Shipment not found");
-    }
 
     if (before.quoteId) {
       if (before.customerId !== parsed.customerId) {
@@ -833,7 +854,6 @@ export async function updateShipmentAction(
 const milestoneUpdateSchema = z.object({
   shipmentId: z.string().min(1),
   code: z.string().min(1).max(60),
-  label: z.string().min(1).max(140),
   expectedAt: z.string().optional(),
   actualAt: z.string().optional(),
   status: z.nativeEnum(MilestoneStatus).optional(),
@@ -1703,12 +1723,10 @@ export async function upsertMilestoneAction(
 ): Promise<ShipmentActionState> {
   try {
     const ctx = await getContext("MILESTONES", "EDIT");
-
     const parsed = milestoneUpdateSchema.parse({
       shipmentId: formData.get("shipmentId"),
       code: formData.get("code"),
-      label: formData.get("label"),
-      expectedAt: String(formData.get("expectedAt") || ""),
+      expectedAt: formData.has("expectedAt") ? String(formData.get("expectedAt") || "") : undefined,
       actualAt: String(formData.get("actualAt") || ""),
       status: formData.get("status") || undefined,
       notes: formData.get("notes") || undefined,
@@ -1731,6 +1749,8 @@ export async function upsertMilestoneAction(
     const actualAt = toDate(parsed.actualAt);
     const normalizedNotes = normalizeOptional(parsed.notes);
     const status = parsed.status ?? (actualAt ? MilestoneStatus.COMPLETED : MilestoneStatus.PENDING);
+    const label = getShipmentMilestoneLabel(parsed.code);
+    const hasExpectedAtInput = formData.has("expectedAt");
 
     await prisma.shipmentMilestone.upsert({
       where: {
@@ -1742,16 +1762,16 @@ export async function upsertMilestoneAction(
       create: {
         shipmentId: shipment.id,
         code: parsed.code,
-        label: parsed.label,
-        expectedAt,
+        label,
+        ...(hasExpectedAtInput ? { expectedAt } : {}),
         actualAt,
         status,
         comment: normalizedNotes,
-        isCritical: defaultMilestones.some((m) => m.code === parsed.code && m.isCritical),
+        isCritical: isCriticalShipmentMilestone(parsed.code),
       },
       update: {
-        label: parsed.label,
-        expectedAt,
+        label,
+        ...(hasExpectedAtInput ? { expectedAt } : {}),
         actualAt,
         status,
         comment: normalizedNotes,
