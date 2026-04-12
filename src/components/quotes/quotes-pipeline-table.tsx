@@ -28,8 +28,8 @@ type QuotesPipelineTableProps = {
 function statusBadgeClass(status: QuoteRow["status"]) {
   if (status === "APPROVED") return "bg-emerald-100 text-emerald-700";
   if (status === "REJECTED") return "bg-rose-100 text-rose-700";
+  if (status === "NEGOTIATION") return "bg-violet-100 text-violet-700";
   if (status === "SENT") return "bg-blue-100 text-blue-700";
-  if (status === "EXPIRED") return "bg-amber-100 text-amber-700";
   return "bg-slate-100 text-slate-700";
 }
 

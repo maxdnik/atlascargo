@@ -39,6 +39,24 @@ const quoteCreateSchema = z.object({
   internalNotes: z.string().trim().max(1000).optional(),
   chargesJson: z.string().trim().optional().default("[]"),
 });
+const quoteUpdateSchema = quoteCreateSchema.extend({
+  id: z.string().min(1, "Quote id is required"),
+});
+const quoteStatusUpdateSchema = z.object({
+  id: z.string().min(1, "Quote id is required"),
+  targetStatus: z.preprocess(
+    (value) => (typeof value === "string" ? value.toUpperCase() : value),
+    z.nativeEnum(QuoteStatus),
+  ),
+});
+
+const EDITABLE_TRANSITIONS: Record<QuoteStatus, QuoteStatus[]> = {
+  DRAFT: [QuoteStatus.SENT],
+  SENT: [QuoteStatus.NEGOTIATION, QuoteStatus.APPROVED, QuoteStatus.REJECTED],
+  NEGOTIATION: [QuoteStatus.SENT, QuoteStatus.APPROVED, QuoteStatus.REJECTED],
+  APPROVED: [],
+  REJECTED: [],
+};
 
 export type QuoteActionState = {
   success: boolean;
@@ -60,6 +78,33 @@ function parseDate(value?: string) {
     throw new Error("Invalid date value");
   }
   return parsed;
+}
+
+function parseQuoteInput(formData: FormData) {
+  return quoteCreateSchema.parse({
+    customerId: formData.get("customerId"),
+    mode: formData.get("mode"),
+    direction: formData.get("direction"),
+    currencyCode: formData.get("currencyCode"),
+    loadType: formData.get("loadType") || undefined,
+    packageCount: formData.get("packageCount") || undefined,
+    packageType: formData.get("packageType") || undefined,
+    grossWeightKg: formData.get("grossWeightKg") || undefined,
+    volumeM3: formData.get("volumeM3") || undefined,
+    cargoReadyDate: String(formData.get("cargoReadyDate") || ""),
+    serviceScope: formData.get("serviceScope") || undefined,
+    customerReference: formData.get("customerReference") || undefined,
+    insuranceRequired: formData.get("insuranceRequired") === "on",
+    customsClearanceScope: formData.get("customsClearanceScope") || QuoteCustomsClearanceScope.NONE,
+    equipmentType: formData.get("equipmentType") || undefined,
+    incotermCode: formData.get("incotermCode") || undefined,
+    originCode: formData.get("originCode"),
+    destinationCode: formData.get("destinationCode"),
+    validUntil: String(formData.get("validUntil") || ""),
+    commodity: formData.get("commodity") || undefined,
+    internalNotes: formData.get("internalNotes") || undefined,
+    chargesJson: String(formData.get("chargesJson") || "[]"),
+  });
 }
 
 type QuoteChargeInput = {
@@ -115,6 +160,58 @@ function parseCharges(raw: string) {
   return rows;
 }
 
+async function validateQuoteReferences(
+  tx: Prisma.TransactionClient,
+  params: {
+    companyId: string;
+    customerId: string;
+    currencyCode: string;
+    incotermCode: string | undefined;
+    chargeCurrencyCodes: string[];
+  },
+) {
+  const [customer, quoteCurrency, incoterm, chargeCurrencies] = await Promise.all([
+    tx.customer.findFirst({
+      where: {
+        id: params.customerId,
+        companyId: params.companyId,
+      },
+      select: { id: true },
+    }),
+    tx.currency.findUnique({
+      where: { code: params.currencyCode },
+      select: { code: true },
+    }),
+    params.incotermCode
+      ? tx.incoterm.findUnique({
+          where: { code: params.incotermCode },
+          select: { code: true },
+        })
+      : Promise.resolve(null),
+    params.chargeCurrencyCodes.length > 0
+      ? tx.currency.findMany({
+          where: { code: { in: params.chargeCurrencyCodes } },
+          select: { code: true },
+        })
+      : Promise.resolve([]),
+  ]);
+
+  if (!customer) {
+    throw new Error("Customer not found");
+  }
+  if (!quoteCurrency) {
+    throw new Error("Currency not found");
+  }
+  if (params.incotermCode && !incoterm) {
+    throw new Error("Invalid incoterm");
+  }
+  if (params.chargeCurrencyCodes.length > 0 && chargeCurrencies.length !== params.chargeCurrencyCodes.length) {
+    throw new Error("Invalid charge currency master data");
+  }
+
+  return customer.id;
+}
+
 async function nextQuoteNumber(tx: Prisma.TransactionClient, companyId: string) {
   const year = new Date().getFullYear();
   const prefix = `Q-${year}`;
@@ -164,24 +261,40 @@ function safeQuoteError(error: unknown) {
       return "A quote with this number already exists. Please retry.";
     }
     if (error.code === "P2003") {
-      return "Unable to create quote because related master data is invalid.";
+      return "Unable to save quote because related master data is invalid.";
     }
   }
   if (error instanceof Error) {
     if (error.message === "Customer not found") {
-      return "Unable to create quote because the selected customer is invalid.";
+      return "Unable to save quote because the selected customer is invalid.";
     }
     if (error.message === "Currency not found") {
-      return "Unable to create quote because the selected currency is invalid.";
+      return "Unable to save quote because the selected currency is invalid.";
     }
     if (error.message === "Invalid incoterm") {
-      return "Unable to create quote because the selected incoterm is invalid.";
+      return "Unable to save quote because the selected incoterm is invalid.";
+    }
+    if (error.message === "Quote not found") {
+      return "Unable to save quote because it no longer exists.";
+    }
+    if (error.message === "Quote is already linked to a shipment") {
+      return "Unable to modify quote because it is already linked to a shipment.";
+    }
+    if (error.message === "Invalid quote status transition") {
+      return "This quote status transition is not allowed.";
     }
     if (error.message.includes("charge")) {
-      return "Unable to create quote because one or more pricing rows are invalid.";
+      return "Unable to save quote because one or more pricing rows are invalid.";
     }
   }
-  return "Unable to create quote right now. Please try again.";
+  return "Unable to save quote right now. Please try again.";
+}
+
+function revalidateQuoteViews(quoteId: string) {
+  revalidatePath("/quotes");
+  revalidatePath(`/quotes/${quoteId}`);
+  revalidatePath(`/quotes/${quoteId}/edit`);
+  revalidatePath("/dashboard");
 }
 
 export async function createQuoteAction(
@@ -190,67 +303,23 @@ export async function createQuoteAction(
 ): Promise<QuoteActionState> {
   try {
     const ctx = await enforceActionPermission("QUOTES", "CREATE");
-    const parsed = quoteCreateSchema.parse({
-      customerId: formData.get("customerId"),
-      mode: formData.get("mode"),
-      direction: formData.get("direction"),
-      currencyCode: formData.get("currencyCode"),
-      loadType: formData.get("loadType") || undefined,
-      packageCount: formData.get("packageCount") || undefined,
-      packageType: formData.get("packageType") || undefined,
-      grossWeightKg: formData.get("grossWeightKg") || undefined,
-      volumeM3: formData.get("volumeM3") || undefined,
-      cargoReadyDate: String(formData.get("cargoReadyDate") || ""),
-      serviceScope: formData.get("serviceScope") || undefined,
-      customerReference: formData.get("customerReference") || undefined,
-      insuranceRequired: formData.get("insuranceRequired") === "on",
-      customsClearanceScope: formData.get("customsClearanceScope") || QuoteCustomsClearanceScope.NONE,
-      equipmentType: formData.get("equipmentType") || undefined,
-      incotermCode: formData.get("incotermCode") || undefined,
-      originCode: formData.get("originCode"),
-      destinationCode: formData.get("destinationCode"),
-      validUntil: String(formData.get("validUntil") || ""),
-      commodity: formData.get("commodity") || undefined,
-      internalNotes: formData.get("internalNotes") || undefined,
-      chargesJson: String(formData.get("chargesJson") || ""),
-    });
+    const parsed = parseQuoteInput(formData);
 
     const validUntil = parseDate(parsed.validUntil);
     const cargoReadyDate = parseDate(parsed.cargoReadyDate);
     const currencyCode = (parsed.currencyCode || "USD").trim().toUpperCase();
     const incotermCode = normalizeOptional(parsed.incotermCode)?.toUpperCase();
     const charges = parseCharges(parsed.chargesJson);
+    const chargeCurrencyCodes = Array.from(new Set(charges.map((row) => row.currencyCode)));
 
     const created = await prisma.$transaction(async (tx) => {
-      const [customer, currency, incoterm] = await Promise.all([
-        tx.customer.findFirst({
-          where: {
-            id: parsed.customerId,
-            companyId: ctx.companyId,
-          },
-          select: { id: true },
-        }),
-        tx.currency.findUnique({
-          where: { code: currencyCode },
-          select: { code: true },
-        }),
-        incotermCode
-          ? tx.incoterm.findUnique({
-              where: { code: incotermCode },
-              select: { code: true },
-            })
-          : Promise.resolve(null),
-      ]);
-
-      if (!customer) {
-        throw new Error("Customer not found");
-      }
-      if (!currency) {
-        throw new Error("Currency not found");
-      }
-      if (incotermCode && !incoterm) {
-        throw new Error("Invalid incoterm");
-      }
+      const customerId = await validateQuoteReferences(tx, {
+        companyId: ctx.companyId,
+        customerId: parsed.customerId,
+        currencyCode,
+        incotermCode,
+        chargeCurrencyCodes,
+      });
 
       const quoteNumber = await nextQuoteNumber(tx, ctx.companyId);
       const totalBuy = charges.reduce((sum, row) => sum + row.buyAmount, 0);
@@ -264,7 +333,7 @@ export async function createQuoteAction(
           branchId: ctx.branchId ?? undefined,
           ownerUserId: ctx.userId,
           quoteNumber,
-          customerId: customer.id,
+          customerId,
           mode: parsed.mode,
           direction: parsed.direction,
           status: QuoteStatus.DRAFT,
@@ -326,8 +395,7 @@ export async function createQuoteAction(
       },
     });
 
-    revalidatePath("/quotes");
-    revalidatePath("/dashboard");
+    revalidateQuoteViews(created.id);
     return { success: true };
   } catch (error) {
     console.error("[createQuoteAction] failed", {
@@ -335,5 +403,235 @@ export async function createQuoteAction(
       message: error instanceof Error ? error.message : String(error),
     });
     return { success: false, error: safeQuoteError(error) };
+  }
+}
+
+export async function updateQuoteAction(
+  _prevState: QuoteActionState,
+  formData: FormData,
+): Promise<QuoteActionState> {
+  try {
+    const ctx = await enforceActionPermission("QUOTES", "EDIT");
+    const parsed = quoteUpdateSchema.parse({
+      ...parseQuoteInput(formData),
+      id: formData.get("id"),
+    });
+
+    const validUntil = parseDate(parsed.validUntil);
+    const cargoReadyDate = parseDate(parsed.cargoReadyDate);
+    const currencyCode = (parsed.currencyCode || "USD").trim().toUpperCase();
+    const incotermCode = normalizeOptional(parsed.incotermCode)?.toUpperCase();
+    const charges = parseCharges(parsed.chargesJson);
+    const chargeCurrencyCodes = Array.from(new Set(charges.map((row) => row.currencyCode)));
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const existing = await tx.quote.findFirst({
+        where: {
+          id: parsed.id,
+          companyId: ctx.companyId,
+        },
+        select: {
+          id: true,
+          status: true,
+          shipment: { select: { id: true } },
+        },
+      });
+      if (!existing) {
+        throw new Error("Quote not found");
+      }
+      if (existing.shipment) {
+        throw new Error("Quote is already linked to a shipment");
+      }
+
+      const customerId = await validateQuoteReferences(tx, {
+        companyId: ctx.companyId,
+        customerId: parsed.customerId,
+        currencyCode,
+        incotermCode,
+        chargeCurrencyCodes,
+      });
+
+      const totalBuy = charges.reduce((sum, row) => sum + row.buyAmount, 0);
+      const totalSell = charges.reduce((sum, row) => sum + row.sellAmount, 0);
+      const marginAmount = totalSell - totalBuy;
+      const marginPct = totalSell > 0 ? (marginAmount / totalSell) * 100 : 0;
+
+      const quote = await tx.quote.update({
+        where: {
+          id: parsed.id,
+          companyId: ctx.companyId,
+        },
+        data: {
+          customerId,
+          mode: parsed.mode,
+          direction: parsed.direction,
+          incotermCode: incotermCode ?? undefined,
+          originCode: normalizeOptional(parsed.originCode)?.toUpperCase(),
+          destinationCode: normalizeOptional(parsed.destinationCode)?.toUpperCase(),
+          loadType: parsed.loadType,
+          packageCount: parsed.packageCount,
+          packageType: normalizeOptional(parsed.packageType),
+          grossWeightKg: parsed.grossWeightKg,
+          volumeM3: parsed.volumeM3,
+          cargoReadyDate: cargoReadyDate ?? undefined,
+          serviceScope: parsed.serviceScope,
+          customerReference: normalizeOptional(parsed.customerReference),
+          insuranceRequired: parsed.insuranceRequired,
+          customsClearanceScope: parsed.customsClearanceScope,
+          equipmentType: normalizeOptional(parsed.equipmentType),
+          commodity: normalizeOptional(parsed.commodity),
+          validUntil,
+          currencyCode,
+          totalBuy,
+          totalSell,
+          marginAmount,
+          marginPct,
+          internalNotes: normalizeOptional(parsed.internalNotes),
+        },
+      });
+
+      await tx.quoteCharge.deleteMany({
+        where: { quoteId: quote.id },
+      });
+
+      if (charges.length > 0) {
+        await tx.quoteCharge.createMany({
+          data: charges.map((row) => ({
+            quoteId: quote.id,
+            concept: row.concept,
+            providerName: row.providerName ?? null,
+            buyAmount: row.buyAmount,
+            sellAmount: row.sellAmount,
+            currencyCode: row.currencyCode,
+          })),
+        });
+      }
+
+      return quote;
+    });
+
+    await prisma.activityLog.create({
+      data: {
+        companyId: ctx.companyId,
+        entityType: "QUOTE",
+        entityId: updated.id,
+        action: "UPDATE",
+        actorId: ctx.userId,
+        afterJson: {
+          quoteNumber: updated.quoteNumber,
+          status: updated.status,
+          customerId: updated.customerId,
+          mode: updated.mode,
+          direction: updated.direction,
+          totalSell: updated.totalSell,
+          totalBuy: updated.totalBuy,
+          marginAmount: updated.marginAmount,
+        },
+      },
+    });
+
+    revalidateQuoteViews(updated.id);
+    return { success: true };
+  } catch (error) {
+    console.error("[updateQuoteAction] failed", {
+      error,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return { success: false, error: safeQuoteError(error) };
+  }
+}
+
+export async function updateQuoteStatusAction(
+  _prevState: QuoteActionState,
+  formData: FormData,
+): Promise<QuoteActionState> {
+  try {
+    const parsed = quoteStatusUpdateSchema.parse({
+      id: formData.get("id"),
+      targetStatus: formData.get("targetStatus"),
+    });
+
+    const needsApprovePermission = parsed.targetStatus === QuoteStatus.APPROVED || parsed.targetStatus === QuoteStatus.REJECTED;
+    const ctx = await enforceActionPermission("QUOTES", needsApprovePermission ? "APPROVE" : "EDIT");
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const quote = await tx.quote.findFirst({
+        where: {
+          id: parsed.id,
+          companyId: ctx.companyId,
+        },
+        select: {
+          id: true,
+          status: true,
+          shipment: { select: { id: true } },
+        },
+      });
+      if (!quote) {
+        throw new Error("Quote not found");
+      }
+      if (quote.shipment) {
+        throw new Error("Quote is already linked to a shipment");
+      }
+
+      const allowed = EDITABLE_TRANSITIONS[quote.status].includes(parsed.targetStatus);
+      if (!allowed) {
+        throw new Error("Invalid quote status transition");
+      }
+
+      return tx.quote.update({
+        where: {
+          id: parsed.id,
+          companyId: ctx.companyId,
+        },
+        data: {
+          status: parsed.targetStatus,
+          sentAt: parsed.targetStatus === QuoteStatus.SENT ? new Date() : undefined,
+          approvedAt:
+            parsed.targetStatus === QuoteStatus.APPROVED
+              ? new Date()
+              : parsed.targetStatus === QuoteStatus.REJECTED
+                ? null
+                : undefined,
+          rejectedAt:
+            parsed.targetStatus === QuoteStatus.REJECTED
+              ? new Date()
+              : parsed.targetStatus === QuoteStatus.APPROVED
+                ? null
+                : undefined,
+        },
+      });
+    });
+
+    await prisma.activityLog.create({
+      data: {
+        companyId: ctx.companyId,
+        entityType: "QUOTE",
+        entityId: updated.id,
+        action: "UPDATE",
+        actorId: ctx.userId,
+        afterJson: {
+          status: updated.status,
+          sentAt: updated.sentAt,
+          approvedAt: updated.approvedAt,
+          rejectedAt: updated.rejectedAt,
+        },
+      },
+    });
+
+    revalidateQuoteViews(updated.id);
+    return { success: true };
+  } catch (error) {
+    console.error("[updateQuoteStatusAction] failed", {
+      error,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return { success: false, error: safeQuoteError(error) };
+  }
+}
+
+export async function updateQuoteStatusDirectAction(formData: FormData): Promise<void> {
+  const result = await updateQuoteStatusAction({ success: false }, formData);
+  if (!result.success) {
+    throw new Error(result.error ?? "Unable to update quote status");
   }
 }

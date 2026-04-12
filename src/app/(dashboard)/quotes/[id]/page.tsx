@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { PermissionAction, PermissionResource, QuoteStatus, TransportMode } from "@prisma/client";
 import { ArrowRight, Plane, ShipWheel, Truck } from "lucide-react";
 
+import { updateQuoteStatusDirectAction } from "@/app/(dashboard)/quotes/actions";
 import { canUser, enforcePagePermission } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 
@@ -15,8 +16,8 @@ type QuoteDetailPageProps = {
 function statusBadgeClass(status: QuoteStatus) {
   if (status === "APPROVED") return "bg-emerald-100 text-emerald-700";
   if (status === "REJECTED") return "bg-rose-100 text-rose-700";
+  if (status === "NEGOTIATION") return "bg-violet-100 text-violet-700";
   if (status === "SENT") return "bg-blue-100 text-blue-700";
-  if (status === "EXPIRED") return "bg-amber-100 text-amber-700";
   return "bg-slate-100 text-slate-700";
 }
 
@@ -47,7 +48,7 @@ export default async function QuoteDetailPage({ params }: QuoteDetailPageProps) 
   const session = await enforcePagePermission(PermissionResource.QUOTES, PermissionAction.VIEW);
   const { id } = await params;
 
-  const [quote, canApproveQuotes] = await Promise.all([
+  const [quote, canApproveQuotes, canEditQuotes] = await Promise.all([
     prisma.quote.findFirst({
       where: {
         id,
@@ -104,6 +105,11 @@ export default async function QuoteDetailPage({ params }: QuoteDetailPageProps) 
       PermissionResource.QUOTES,
       PermissionAction.APPROVE,
     ),
+    canUser(
+      { id: session.userId, role: session.role, companyId: session.companyId },
+      PermissionResource.QUOTES,
+      PermissionAction.EDIT,
+    ),
   ]);
 
   if (!quote) {
@@ -145,6 +151,20 @@ export default async function QuoteDetailPage({ params }: QuoteDetailPageProps) 
             </Link>
           ) : (
             <span className="text-slate-500">No shipment linked</span>
+          )}
+        </div>
+        <div className="mt-4">
+          {canEditQuotes && !quote.shipment ? (
+            <Link
+              href={`/quotes/${quote.id}/edit`}
+              className="inline-flex items-center rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
+            >
+              Edit
+            </Link>
+          ) : (
+            <span className="inline-flex items-center rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-400">
+              Edit unavailable
+            </span>
           )}
         </div>
       </header>
@@ -256,23 +276,83 @@ export default async function QuoteDetailPage({ params }: QuoteDetailPageProps) 
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-700">Actions</h2>
         <div className="mt-3 flex flex-wrap gap-2">
-          <button
-            type="button"
-            disabled
-            className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-400"
+          <Link
+            href={`/quotes/${quote.id}/edit`}
+            className={`rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium ${
+              canEditQuotes && !quote.shipment
+                ? "text-slate-700 transition hover:bg-slate-50"
+                : "pointer-events-none text-slate-400"
+            }`}
           >
-            Edit (coming soon)
-          </button>
+            Edit
+          </Link>
 
           {quote.status === "DRAFT" ? (
-            <button
-              type="button"
-              disabled={!canApproveQuotes}
-              className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-400"
-              title={canApproveQuotes ? "Approval flow coming soon" : "Missing QUOTES:APPROVE permission"}
-            >
-              Approve (coming soon)
-            </button>
+            <form action={updateQuoteStatusDirectAction}>
+              <input type="hidden" name="id" value={quote.id} />
+              <input type="hidden" name="targetStatus" value={QuoteStatus.SENT} />
+              <button
+                type="submit"
+                disabled={!canEditQuotes || Boolean(quote.shipment)}
+                className="rounded-lg border border-blue-200 px-3 py-1.5 text-xs font-medium text-blue-700 transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400"
+              >
+                Send to customer
+              </button>
+            </form>
+          ) : null}
+
+          {(quote.status === "SENT" || quote.status === "NEGOTIATION") && !quote.shipment ? (
+            <>
+              {quote.status === "SENT" ? (
+                <form action={updateQuoteStatusDirectAction}>
+                  <input type="hidden" name="id" value={quote.id} />
+                  <input type="hidden" name="targetStatus" value={QuoteStatus.NEGOTIATION} />
+                  <button
+                    type="submit"
+                    disabled={!canEditQuotes}
+                    className="rounded-lg border border-violet-200 px-3 py-1.5 text-xs font-medium text-violet-700 transition hover:bg-violet-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400"
+                  >
+                    Mark as negotiating
+                  </button>
+                </form>
+              ) : (
+                <form action={updateQuoteStatusDirectAction}>
+                  <input type="hidden" name="id" value={quote.id} />
+                  <input type="hidden" name="targetStatus" value={QuoteStatus.SENT} />
+                  <button
+                    type="submit"
+                    disabled={!canEditQuotes}
+                    className="rounded-lg border border-blue-200 px-3 py-1.5 text-xs font-medium text-blue-700 transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400"
+                  >
+                    Mark as sent
+                  </button>
+                </form>
+              )}
+
+              <form action={updateQuoteStatusDirectAction}>
+                <input type="hidden" name="id" value={quote.id} />
+                <input type="hidden" name="targetStatus" value={QuoteStatus.APPROVED} />
+                <button
+                  type="submit"
+                  disabled={!canApproveQuotes}
+                  className="rounded-lg border border-emerald-200 px-3 py-1.5 text-xs font-medium text-emerald-700 transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400"
+                >
+                  Approve
+                </button>
+              </form>
+
+              <form action={updateQuoteStatusDirectAction}>
+                <input type="hidden" name="id" value={quote.id} />
+                <input type="hidden" name="targetStatus" value={QuoteStatus.REJECTED} />
+                <button
+                  type="submit"
+                  disabled={!canApproveQuotes}
+                  className="rounded-lg border border-rose-200 px-3 py-1.5 text-xs font-medium text-rose-700 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400"
+                >
+                  Reject
+                </button>
+              </form>
+            </>
           ) : null}
 
           {quote.status === "APPROVED" && !quote.shipment ? (

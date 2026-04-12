@@ -21,6 +21,38 @@ type QuoteFormProps = {
   customers: Array<Pick<Customer, "id" | "code" | "legalName">>;
   currencies: Array<Pick<Currency, "code" | "name">>;
   incoterms: Array<Pick<Incoterm, "code" | "description">>;
+  redirectTo?: string;
+  defaults?: {
+    id?: string;
+    customerId?: string;
+    mode?: TransportMode;
+    direction?: TradeDirection;
+    currencyCode?: string;
+    loadType?: QuoteLoadType | null;
+    packageCount?: number | null;
+    packageType?: string | null;
+    grossWeightKg?: string | null;
+    volumeM3?: string | null;
+    cargoReadyDate?: string | null;
+    serviceScope?: QuoteServiceScope | null;
+    customerReference?: string | null;
+    insuranceRequired?: boolean;
+    customsClearanceScope?: QuoteCustomsClearanceScope;
+    equipmentType?: string | null;
+    incotermCode?: string | null;
+    originCode?: string | null;
+    destinationCode?: string | null;
+    validUntil?: string | null;
+    commodity?: string | null;
+    internalNotes?: string | null;
+    charges?: Array<{
+      concept?: string | null;
+      providerName?: string | null;
+      buyAmount?: string | null;
+      sellAmount?: string | null;
+      currencyCode?: string | null;
+    }>;
+  };
 };
 
 const initialState: QuoteActionState = { success: false };
@@ -54,6 +86,23 @@ function createChargeRow(currencyCode: string): ChargeRow {
   };
 }
 
+function createChargeRowsFromDefaults(
+  rows: NonNullable<QuoteFormProps["defaults"]>["charges"],
+  fallbackCurrency: string,
+): ChargeRow[] {
+  if (!rows || rows.length === 0) {
+    return [createChargeRow(fallbackCurrency)];
+  }
+  return rows.map((row, index) => ({
+    id: `default-${index}`,
+    concept: row.concept ?? "",
+    providerName: row.providerName ?? "",
+    buyAmount: row.buyAmount ?? "",
+    sellAmount: row.sellAmount ?? "",
+    currencyCode: row.currencyCode ?? fallbackCurrency,
+  }));
+}
+
 function toNumber(value: string) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
@@ -74,18 +123,21 @@ export function QuoteForm({
   customers,
   currencies,
   incoterms,
+  redirectTo = "/quotes",
+  defaults,
 }: QuoteFormProps) {
   const [state, formAction, pending] = useActionState(action, initialState);
   const router = useRouter();
-  const [charges, setCharges] = useState<ChargeRow[]>([createChargeRow("USD")]);
-  const [selectedCurrency, setSelectedCurrency] = useState("USD");
+  const initialCurrency = defaults?.currencyCode ?? "USD";
+  const [charges, setCharges] = useState<ChargeRow[]>(() => createChargeRowsFromDefaults(defaults?.charges, initialCurrency));
+  const [selectedCurrency, setSelectedCurrency] = useState(initialCurrency);
 
   useEffect(() => {
     if (state.success) {
-      router.push("/quotes");
+      router.push(redirectTo);
       router.refresh();
     }
-  }, [router, state.success]);
+  }, [redirectTo, router, state.success]);
 
   const totals = useMemo(() => {
     const totalBuy = charges.reduce((sum, row) => sum + toNumber(row.buyAmount), 0);
@@ -136,6 +188,7 @@ export function QuoteForm({
 
   return (
     <form action={formAction} className="space-y-4 rounded-xl border border-slate-200 bg-white p-5">
+      {defaults?.id ? <input type="hidden" name="id" value={defaults.id} /> : null}
       <section className="space-y-3">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-700">Core quote data</h2>
         <p className="text-xs text-slate-500">
@@ -147,7 +200,7 @@ export function QuoteForm({
             <select
               name="customerId"
               required
-              defaultValue=""
+              defaultValue={defaults?.customerId ?? ""}
               className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
             >
               <option value="" disabled>
@@ -164,7 +217,7 @@ export function QuoteForm({
             <label className="mb-1 block text-sm font-medium text-slate-700">Currency</label>
             <select
               name="currencyCode"
-              defaultValue="USD"
+              defaultValue={defaults?.currencyCode ?? "USD"}
               onChange={(event) => handleQuoteCurrencyChange(event.target.value)}
               className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
             >
@@ -180,7 +233,7 @@ export function QuoteForm({
             <select
               name="mode"
               required
-              defaultValue={TransportMode.OCEAN}
+              defaultValue={defaults?.mode ?? TransportMode.OCEAN}
               className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
             >
               {modeOptions.map((mode) => (
@@ -195,7 +248,7 @@ export function QuoteForm({
             <select
               name="direction"
               required
-              defaultValue={TradeDirection.EXPORT}
+              defaultValue={defaults?.direction ?? TradeDirection.EXPORT}
               className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
             >
               {directionOptions.map((direction) => (
@@ -209,7 +262,7 @@ export function QuoteForm({
             <label className="mb-1 block text-sm font-medium text-slate-700">Shipment type / load type</label>
             <select
               name="loadType"
-              defaultValue=""
+              defaultValue={defaults?.loadType ?? ""}
               className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
             >
               <option value="">Select load type</option>
@@ -225,6 +278,7 @@ export function QuoteForm({
             <input
               name="customerReference"
               placeholder="PO / RFQ / customer reference"
+              defaultValue={defaults?.customerReference ?? ""}
               className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
             />
           </div>
@@ -238,7 +292,7 @@ export function QuoteForm({
             <label className="mb-1 block text-sm font-medium text-slate-700">Incoterm</label>
             <select
               name="incotermCode"
-              defaultValue=""
+              defaultValue={defaults?.incotermCode ?? ""}
               className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
             >
               <option value="">Select incoterm</option>
@@ -254,6 +308,7 @@ export function QuoteForm({
             <input
               type="date"
               name="validUntil"
+              defaultValue={defaults?.validUntil ?? ""}
               className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
             />
           </div>
@@ -263,6 +318,7 @@ export function QuoteForm({
               name="originCode"
               required
               placeholder="Origin code (e.g. ARBUE, CNSHA, JFK)"
+              defaultValue={defaults?.originCode ?? ""}
               className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
             />
           </div>
@@ -272,6 +328,7 @@ export function QuoteForm({
               name="destinationCode"
               required
               placeholder="Destination code (e.g. USMIA, DEHAM, CLVAP)"
+              defaultValue={defaults?.destinationCode ?? ""}
               className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
             />
           </div>
@@ -279,7 +336,7 @@ export function QuoteForm({
             <label className="mb-1 block text-sm font-medium text-slate-700">Service scope</label>
             <select
               name="serviceScope"
-              defaultValue=""
+              defaultValue={defaults?.serviceScope ?? ""}
               className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
             >
               <option value="">Select service scope</option>
@@ -295,6 +352,7 @@ export function QuoteForm({
             <input
               name="commodity"
               placeholder="Commodity description"
+              defaultValue={defaults?.commodity ?? ""}
               className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
             />
           </div>
@@ -303,6 +361,7 @@ export function QuoteForm({
             <input
               type="date"
               name="cargoReadyDate"
+              defaultValue={defaults?.cargoReadyDate ?? ""}
               className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
             />
           </div>
@@ -319,6 +378,7 @@ export function QuoteForm({
               type="number"
               min={1}
               name="packageCount"
+              defaultValue={defaults?.packageCount ?? ""}
               className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
             />
           </div>
@@ -327,6 +387,7 @@ export function QuoteForm({
             <input
               name="packageType"
               placeholder="pallets, cartons, crates..."
+              defaultValue={defaults?.packageType ?? ""}
               className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
             />
           </div>
@@ -337,6 +398,7 @@ export function QuoteForm({
               min={0.001}
               step="0.001"
               name="grossWeightKg"
+              defaultValue={defaults?.grossWeightKg ?? ""}
               className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
             />
           </div>
@@ -347,6 +409,7 @@ export function QuoteForm({
               min={0.001}
               step="0.001"
               name="volumeM3"
+              defaultValue={defaults?.volumeM3 ?? ""}
               className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
             />
           </div>
@@ -355,6 +418,7 @@ export function QuoteForm({
             <input
               name="equipmentType"
               placeholder="20DV, 40HC, REEFER..."
+              defaultValue={defaults?.equipmentType ?? ""}
               className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
             />
           </div>
@@ -365,14 +429,19 @@ export function QuoteForm({
         <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-700">Services / notes</h2>
         <div className="grid gap-4 md:grid-cols-2">
           <label className="inline-flex items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
-            <input type="checkbox" name="insuranceRequired" className="h-4 w-4 rounded border-slate-300" />
+            <input
+              type="checkbox"
+              name="insuranceRequired"
+              defaultChecked={defaults?.insuranceRequired ?? false}
+              className="h-4 w-4 rounded border-slate-300"
+            />
             Insurance required
           </label>
           <div>
             <label className="mb-1 block text-sm font-medium text-slate-700">Customs clearance required</label>
             <select
               name="customsClearanceScope"
-              defaultValue={QuoteCustomsClearanceScope.NONE}
+              defaultValue={defaults?.customsClearanceScope ?? QuoteCustomsClearanceScope.NONE}
               className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
             >
               {Object.values(QuoteCustomsClearanceScope).map((value) => (
@@ -387,6 +456,7 @@ export function QuoteForm({
             <textarea
               name="internalNotes"
               rows={3}
+              defaultValue={defaults?.internalNotes ?? ""}
               className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
               placeholder="Internal commercial notes (optional)"
             />
