@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { Prisma } from "@prisma/client";
 import { z } from "zod";
 
 import { enforceActionPermission } from "@/lib/permissions";
@@ -23,6 +24,21 @@ export type CustomerActionState = {
   success: boolean;
   error?: string;
 };
+
+function getSafeCustomerActionError(error: unknown) {
+  if (error instanceof z.ZodError) {
+    return "Please review the form fields and try again.";
+  }
+  if (error instanceof Prisma.PrismaClientKnownRequestError) {
+    if (error.code === "P2002") {
+      return "A customer with this code already exists in your company.";
+    }
+    if (error.code === "P2003") {
+      return "Unable to save customer because your branch assignment is invalid. Please contact an administrator.";
+    }
+  }
+  return "Unable to save customer right now. Please try again.";
+}
 
 async function getContext() {
   return enforceActionPermission("CUSTOMERS", "EDIT");
@@ -81,8 +97,11 @@ export async function createCustomerAction(
     revalidatePath("/customers");
     return { success: true };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
-    return { success: false, error: message };
+    console.error("[createCustomerAction] failed", {
+      error,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return { success: false, error: getSafeCustomerActionError(error) };
   }
 }
 
