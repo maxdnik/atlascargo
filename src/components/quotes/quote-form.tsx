@@ -138,6 +138,9 @@ export function QuoteForm({
     <form action={formAction} className="space-y-4 rounded-xl border border-slate-200 bg-white p-5">
       <section className="space-y-3">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-700">Core quote data</h2>
+        <p className="text-xs text-slate-500">
+          Start with a lightweight draft: customer, mode, direction, origin, destination, and pricing lines.
+        </p>
         <div className="grid gap-4 md:grid-cols-2">
           <div>
             <label className="mb-1 block text-sm font-medium text-slate-700">Customer *</label>
@@ -158,10 +161,9 @@ export function QuoteForm({
             </select>
           </div>
           <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">Currency *</label>
+            <label className="mb-1 block text-sm font-medium text-slate-700">Currency</label>
             <select
               name="currencyCode"
-              required
               defaultValue="USD"
               onChange={(event) => handleQuoteCurrencyChange(event.target.value)}
               className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
@@ -204,13 +206,13 @@ export function QuoteForm({
             </select>
           </div>
           <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">Shipment type / load type *</label>
+            <label className="mb-1 block text-sm font-medium text-slate-700">Shipment type / load type</label>
             <select
               name="loadType"
-              required
-              defaultValue={QuoteLoadType.FCL}
+              defaultValue=""
               className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
             >
+              <option value="">Select load type</option>
               {Object.values(QuoteLoadType).map((value) => (
                 <option key={value} value={value}>
                   {value}
@@ -256,29 +258,31 @@ export function QuoteForm({
             />
           </div>
           <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">Origin code</label>
+            <label className="mb-1 block text-sm font-medium text-slate-700">Origin code *</label>
             <input
               name="originCode"
+              required
               placeholder="Origin code (e.g. ARBUE, CNSHA, JFK)"
               className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
             />
           </div>
           <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">Destination code</label>
+            <label className="mb-1 block text-sm font-medium text-slate-700">Destination code *</label>
             <input
               name="destinationCode"
+              required
               placeholder="Destination code (e.g. USMIA, DEHAM, CLVAP)"
               className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
             />
           </div>
           <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">Service scope *</label>
+            <label className="mb-1 block text-sm font-medium text-slate-700">Service scope</label>
             <select
               name="serviceScope"
-              required
-              defaultValue={QuoteServiceScope.PORT_TO_PORT}
+              defaultValue=""
               className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
             >
+              <option value="">Select service scope</option>
               {Object.values(QuoteServiceScope).map((value) => (
                 <option key={value} value={value}>
                   {value}
@@ -295,11 +299,10 @@ export function QuoteForm({
             />
           </div>
           <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">Cargo ready date *</label>
+            <label className="mb-1 block text-sm font-medium text-slate-700">Cargo ready date</label>
             <input
               type="date"
               name="cargoReadyDate"
-              required
               className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
             />
           </div>
@@ -308,45 +311,42 @@ export function QuoteForm({
 
       <section>
         <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-700">Cargo details</h2>
+        <p className="mt-1 text-xs text-slate-500">Optional at draft stage. Complete when commercial data is ready.</p>
         <div className="mt-3 grid gap-4 md:grid-cols-2">
           <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">Packages *</label>
+            <label className="mb-1 block text-sm font-medium text-slate-700">Packages</label>
             <input
               type="number"
               min={1}
               name="packageCount"
-              required
               className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
             />
           </div>
           <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">Package type *</label>
+            <label className="mb-1 block text-sm font-medium text-slate-700">Package type</label>
             <input
               name="packageType"
-              required
               placeholder="pallets, cartons, crates..."
               className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
             />
           </div>
           <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">Gross weight (kg) *</label>
+            <label className="mb-1 block text-sm font-medium text-slate-700">Gross weight (kg)</label>
             <input
               type="number"
               min={0.001}
               step="0.001"
               name="grossWeightKg"
-              required
               className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
             />
           </div>
           <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">Volume (m3) *</label>
+            <label className="mb-1 block text-sm font-medium text-slate-700">Volume (m3)</label>
             <input
               type="number"
               min={0.001}
               step="0.001"
               name="volumeM3"
-              required
               className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
             />
           </div>
@@ -369,10 +369,9 @@ export function QuoteForm({
             Insurance required
           </label>
           <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">Customs clearance required *</label>
+            <label className="mb-1 block text-sm font-medium text-slate-700">Customs clearance required</label>
             <select
               name="customsClearanceScope"
-              required
               defaultValue={QuoteCustomsClearanceScope.NONE}
               className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
             >
@@ -406,6 +405,9 @@ export function QuoteForm({
             Add charge
           </button>
         </div>
+        <p className="text-xs text-slate-500">
+          Tip: you can save a draft with just one basic charge line and complete details later.
+        </p>
 
         <input type="hidden" name="chargesJson" value={chargesPayload} />
 

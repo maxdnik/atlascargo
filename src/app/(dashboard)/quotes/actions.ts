@@ -19,25 +19,25 @@ const quoteCreateSchema = z.object({
   customerId: z.string().min(1, "Customer is required"),
   mode: z.nativeEnum(TransportMode),
   direction: z.nativeEnum(TradeDirection),
-  currencyCode: z.string().trim().min(1, "Currency is required"),
-  loadType: z.nativeEnum(QuoteLoadType),
-  packageCount: z.coerce.number().int().min(1).max(1_000_000),
-  packageType: z.string().trim().min(1).max(80),
-  grossWeightKg: z.coerce.number().positive().max(10_000_000),
-  volumeM3: z.coerce.number().positive().max(100_000),
-  cargoReadyDate: z.string(),
-  serviceScope: z.nativeEnum(QuoteServiceScope),
+  originCode: z.string().trim().min(2, "Origin is required").max(32),
+  destinationCode: z.string().trim().min(2, "Destination is required").max(32),
+  currencyCode: z.string().trim().min(1).default("USD"),
+  loadType: z.nativeEnum(QuoteLoadType).optional(),
+  packageCount: z.coerce.number().int().min(1).max(1_000_000).optional(),
+  packageType: z.string().trim().min(1).max(80).optional(),
+  grossWeightKg: z.coerce.number().positive().max(10_000_000).optional(),
+  volumeM3: z.coerce.number().positive().max(100_000).optional(),
+  cargoReadyDate: z.string().optional(),
+  serviceScope: z.nativeEnum(QuoteServiceScope).optional(),
   customerReference: z.string().trim().max(80).optional(),
   insuranceRequired: z.boolean().default(false),
-  customsClearanceScope: z.nativeEnum(QuoteCustomsClearanceScope),
+  customsClearanceScope: z.nativeEnum(QuoteCustomsClearanceScope).default(QuoteCustomsClearanceScope.NONE),
   equipmentType: z.string().trim().max(80).optional(),
   incotermCode: z.string().trim().max(10).optional(),
-  originCode: z.string().trim().max(32).optional(),
-  destinationCode: z.string().trim().max(32).optional(),
   validUntil: z.string().optional(),
   commodity: z.string().trim().max(160).optional(),
   internalNotes: z.string().trim().max(1000).optional(),
-  chargesJson: z.string().trim().min(2, "At least one charge is required"),
+  chargesJson: z.string().trim().optional().default("[]"),
 });
 
 export type QuoteActionState = {
@@ -77,11 +77,12 @@ function parseCharges(raw: string) {
   } catch {
     throw new Error("Invalid charges payload");
   }
-  if (!Array.isArray(parsed) || parsed.length === 0) {
-    throw new Error("At least one charge is required");
+  if (!Array.isArray(parsed)) {
+    throw new Error("Invalid charges payload");
   }
 
-  const rows: QuoteChargeInput[] = parsed.map((row) => {
+  const rows: QuoteChargeInput[] = [];
+  for (const row of parsed) {
     if (!row || typeof row !== "object") {
       throw new Error("Invalid charge row");
     }
@@ -93,19 +94,23 @@ function parseCharges(raw: string) {
     const currencyCode =
       typeof record.currencyCode === "string" ? record.currencyCode.trim().toUpperCase() : "";
 
-    if (!concept) throw new Error("Each charge requires a concept");
+    const isEmptyRow = !concept && !providerName && buyAmount === 0 && sellAmount === 0;
+    if (isEmptyRow) {
+      continue;
+    }
+    if (!concept) throw new Error("Each filled charge row requires a concept");
     if (!Number.isFinite(buyAmount) || buyAmount < 0) throw new Error("Invalid buy amount");
     if (!Number.isFinite(sellAmount) || sellAmount < 0) throw new Error("Invalid sell amount");
     if (!currencyCode) throw new Error("Invalid charge currency");
 
-    return {
+    rows.push({
       concept,
       providerName: providerName || undefined,
       buyAmount,
       sellAmount,
       currencyCode,
-    };
-  });
+    });
+  }
 
   return rows;
 }
@@ -190,20 +195,20 @@ export async function createQuoteAction(
       mode: formData.get("mode"),
       direction: formData.get("direction"),
       currencyCode: formData.get("currencyCode"),
-      loadType: formData.get("loadType"),
-      packageCount: formData.get("packageCount"),
-      packageType: formData.get("packageType"),
-      grossWeightKg: formData.get("grossWeightKg"),
-      volumeM3: formData.get("volumeM3"),
+      loadType: formData.get("loadType") || undefined,
+      packageCount: formData.get("packageCount") || undefined,
+      packageType: formData.get("packageType") || undefined,
+      grossWeightKg: formData.get("grossWeightKg") || undefined,
+      volumeM3: formData.get("volumeM3") || undefined,
       cargoReadyDate: String(formData.get("cargoReadyDate") || ""),
-      serviceScope: formData.get("serviceScope"),
+      serviceScope: formData.get("serviceScope") || undefined,
       customerReference: formData.get("customerReference") || undefined,
       insuranceRequired: formData.get("insuranceRequired") === "on",
-      customsClearanceScope: formData.get("customsClearanceScope"),
+      customsClearanceScope: formData.get("customsClearanceScope") || QuoteCustomsClearanceScope.NONE,
       equipmentType: formData.get("equipmentType") || undefined,
       incotermCode: formData.get("incotermCode") || undefined,
-      originCode: formData.get("originCode") || undefined,
-      destinationCode: formData.get("destinationCode") || undefined,
+      originCode: formData.get("originCode"),
+      destinationCode: formData.get("destinationCode"),
       validUntil: String(formData.get("validUntil") || ""),
       commodity: formData.get("commodity") || undefined,
       internalNotes: formData.get("internalNotes") || undefined,
@@ -212,7 +217,7 @@ export async function createQuoteAction(
 
     const validUntil = parseDate(parsed.validUntil);
     const cargoReadyDate = parseDate(parsed.cargoReadyDate);
-    const currencyCode = parsed.currencyCode.trim().toUpperCase();
+    const currencyCode = (parsed.currencyCode || "USD").trim().toUpperCase();
     const incotermCode = normalizeOptional(parsed.incotermCode)?.toUpperCase();
     const charges = parseCharges(parsed.chargesJson);
 
@@ -268,7 +273,7 @@ export async function createQuoteAction(
           destinationCode: normalizeOptional(parsed.destinationCode)?.toUpperCase(),
           loadType: parsed.loadType,
           packageCount: parsed.packageCount,
-          packageType: parsed.packageType.trim(),
+          packageType: normalizeOptional(parsed.packageType),
           grossWeightKg: parsed.grossWeightKg,
           volumeM3: parsed.volumeM3,
           cargoReadyDate: cargoReadyDate ?? undefined,
