@@ -118,6 +118,7 @@ type ShipmentDetailViewModel = {
     issueDate?: string | null;
     version: number;
     status: DocumentRecordStatus;
+    isClientVisible: boolean;
     notes?: string | null;
   }>;
   revenues: Array<{
@@ -849,6 +850,7 @@ export function ShipmentDetailClient({
                         <p>Ref: {doc.referenceNumber ?? "-"}</p>
                         <p>Issue: {dateLabel(doc.issueDate)}</p>
                         <p>Version: {doc.version}</p>
+                        <p>Client visible: {doc.isClientVisible ? "Yes" : "No"}</p>
                       </div>
                       {canDeleteDocuments ? (
                         <form action={deleteDocumentAction} className="mt-2">
@@ -881,6 +883,14 @@ export function ShipmentDetailClient({
                     <select name="status" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm">
                       {Object.values(DocumentRecordStatus).map((status) => <option key={status} value={status}>{status}</option>)}
                     </select>
+                    <label className="inline-flex items-center gap-2 text-xs text-slate-700">
+                      <input
+                        type="checkbox"
+                        name="isClientVisible"
+                        className="h-4 w-4 rounded border-slate-300"
+                      />
+                      Visible in client portal
+                    </label>
                     <textarea name="notes" rows={2} placeholder="Internal notes" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
                     <button type="submit" className="rounded-lg bg-sky-600 px-3 py-2 text-xs font-medium text-white transition hover:bg-sky-500">
                       Save document
@@ -910,6 +920,14 @@ export function ShipmentDetailClient({
                     <select name="status" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm">
                       {Object.values(DocumentRecordStatus).map((status) => <option key={status} value={status}>{status}</option>)}
                     </select>
+                    <label className="inline-flex items-center gap-2 text-xs text-slate-700">
+                      <input
+                        type="checkbox"
+                        name="isClientVisible"
+                        className="h-4 w-4 rounded border-slate-300"
+                      />
+                      Visible in client portal
+                    </label>
                     <textarea name="notes" rows={2} placeholder="Internal notes" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
                     <button type="submit" className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-50">
                       Update document

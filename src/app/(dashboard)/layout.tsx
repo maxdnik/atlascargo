@@ -18,6 +18,9 @@ export default async function DashboardLayout({
   if (!session?.user) {
     redirect("/login");
   }
+  if (session.user.isPortalUser) {
+    redirect("/portal");
+  }
 
   const moduleAccess = await getVisibleModulesForCurrentUser(session.user);
   const fallbackViewModules = new Set(

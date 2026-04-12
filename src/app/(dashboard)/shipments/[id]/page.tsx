@@ -234,6 +234,7 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
           issueDate: doc.issueDate?.toISOString() ?? null,
           version: doc.version,
           status: doc.status,
+          isClientVisible: doc.isClientVisible,
           notes: doc.notes,
         })),
         revenues: shipment.revenues.map((row) => ({

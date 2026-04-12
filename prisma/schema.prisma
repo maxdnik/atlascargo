@@ -68,9 +68,33 @@ enum ShipmentStatus {
 enum QuoteStatus {
   DRAFT
   SENT
+  NEGOTIATION
   APPROVED
   REJECTED
-  EXPIRED
+}
+
+enum QuoteLoadType {
+  FCL
+  LCL
+  STANDARD
+  EXPRESS
+  FTL
+  LTL
+  OTHER
+}
+
+enum QuoteServiceScope {
+  PORT_TO_PORT
+  DOOR_TO_PORT
+  PORT_TO_DOOR
+  DOOR_TO_DOOR
+}
+
+enum QuoteCustomsClearanceScope {
+  NONE
+  ORIGIN
+  DESTINATION
+  BOTH
 }
 
 enum MilestoneStatus {
@@ -259,6 +283,7 @@ model Company {
   tasks         Task[]
   notes         Note[]
   activities    ActivityLog[]
+  portalAccesses CustomerPortalAccess[]
 }
 
 model Branch {
@@ -296,6 +321,7 @@ model User {
   name         String
   passwordHash String
   role         UserRole @default(OPERATIONS)
+  isPortalUser Boolean  @default(false)
   isActive     Boolean  @default(true)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
@@ -311,9 +337,11 @@ model User {
   activities         ActivityLog[]        @relation("ActivityActor")
   notifications      Notification[]
   uploadedDocuments  ShipmentDocument[]   @relation("DocumentUploader")
+  portalAccesses     CustomerPortalAccess[]
 
   @@unique([companyId, email])
   @@index([companyId, role, isActive])
+  @@index([companyId, isPortalUser, isActive])
 }
 
 model Role {
@@ -481,9 +509,28 @@ model Customer {
   revenues  Revenue[]
   invoices  Invoice[]
   notes     Note[]
+  portalAccesses CustomerPortalAccess[]
 
   @@unique([companyId, code])
   @@index([companyId, legalName])
+}
+
+model CustomerPortalAccess {
+  id         String   @id @default(cuid())
+  userId     String
+  companyId  String
+  customerId String
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user     User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  company  Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, customerId])
+  @@index([companyId, customerId, isActive])
+  @@index([userId, isActive])
 }
 
 model Prospect {
@@ -563,6 +610,17 @@ model Quote {
   airportDestination String?
   placeOfReceipt String?
   placeOfDelivery String?
+  loadType      QuoteLoadType?
+  packageCount  Int?
+  packageType   String?
+  grossWeightKg Decimal?
+  volumeM3      Decimal?
+  cargoReadyDate DateTime?
+  serviceScope  QuoteServiceScope?
+  customerReference String?
+  insuranceRequired Boolean @default(false)
+  customsClearanceScope QuoteCustomsClearanceScope @default(NONE)
+  equipmentType String?
   commodity     String?
   validUntil    DateTime?
   currencyCode  String
@@ -614,6 +672,7 @@ model QuoteCharge {
   quoteId      String
   concept      String
   chargeType   String?
+  providerName String?
   buyAmount    Decimal  @default(0)
   sellAmount   Decimal  @default(0)
   currencyCode String
@@ -810,6 +869,7 @@ model ShipmentDocument {
   uploadedAt      DateTime             @default(now())
   version         Int                  @default(1)
   status          DocumentRecordStatus @default(PENDING)
+  isClientVisible Boolean              @default(false)
   notes           String?
   createdAt       DateTime             @default(now())
   updatedAt       DateTime             @updatedAt

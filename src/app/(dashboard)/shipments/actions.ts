@@ -849,6 +849,7 @@ const shipmentDocumentSchema = z.object({
   issueDate: z.string().optional(),
   version: z.coerce.number().int().min(1).max(100).optional(),
   status: z.nativeEnum(DocumentRecordStatus),
+  isClientVisible: z.boolean().default(false),
   notes: z.string().max(600).optional(),
 });
 
@@ -975,6 +976,7 @@ export async function upsertShipmentDocumentAction(
       issueDate: String(formData.get("issueDate") || ""),
       version: formData.get("version") || undefined,
       status: parseDocumentStatus(formData.get("status")),
+      isClientVisible: formData.get("isClientVisible") === "on",
       notes: formData.get("notes") || undefined,
     });
 
@@ -988,6 +990,7 @@ export async function upsertShipmentDocumentAction(
       issueDate: Date | null;
       version: number;
       status: DocumentRecordStatus;
+      isClientVisible: boolean;
       notes: string | null;
       uploadedById: string;
     } = {
@@ -998,6 +1001,7 @@ export async function upsertShipmentDocumentAction(
       issueDate,
       version: parsed.version ?? 1,
       status: parsed.status,
+      isClientVisible: parsed.isClientVisible,
       notes: normalizeOptional(parsed.notes),
       uploadedById: ctx.userId,
     };

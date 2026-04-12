@@ -91,6 +91,45 @@ async function hasDbPermission(
   return role.permissions.length > 0;
 }
 
+type ResolveActionBranchInput = {
+  userId: string;
+  companyId: string;
+  sessionBranchId?: string | null;
+};
+
+async function resolveActionBranchId(input: ResolveActionBranchInput) {
+  if (input.sessionBranchId) {
+    const matching = await prisma.userBranchAccess.findFirst({
+      where: {
+        userId: input.userId,
+        branchId: input.sessionBranchId,
+        branch: {
+          companyId: input.companyId,
+        },
+      },
+      select: { branchId: true },
+    });
+    if (matching?.branchId) {
+      return matching.branchId;
+    }
+  }
+
+  const fallback = await prisma.userBranchAccess.findFirst({
+    where: {
+      userId: input.userId,
+      branch: {
+        companyId: input.companyId,
+      },
+    },
+    orderBy: {
+      createdAt: "asc",
+    },
+    select: { branchId: true },
+  });
+
+  return fallback?.branchId ?? null;
+}
+
 export async function canUser(
   user: SessionUser,
   resource: PermissionResource,
@@ -158,10 +197,16 @@ export async function enforceActionPermission(
     throw new Error("Insufficient permissions");
   }
 
+  const resolvedBranchId = await resolveActionBranchId({
+    userId: session.user.id,
+    companyId: session.user.companyId,
+    sessionBranchId: session.user.branchId,
+  });
+
   return {
     userId: session.user.id,
     companyId: session.user.companyId,
-    branchId: session.user.branchId,
+    branchId: resolvedBranchId,
     role: session.user.role,
   };
 }

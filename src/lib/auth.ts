@@ -23,6 +23,8 @@ type ExtendedAuthUser = {
   companyName?: string;
   branchId?: string | null;
   branchCode?: string | null;
+  isPortalUser?: boolean;
+  portalCustomerIds?: string[];
 };
 
 export const authOptions: NextAuthOptions = {
@@ -71,6 +73,17 @@ export const authOptions: NextAuthOptions = {
         if (!validPassword) return null;
 
         const defaultBranch = user.branchAccesses[0]?.branch;
+        const portalAccesses = await prisma.customerPortalAccess.findMany({
+          where: {
+            userId: user.id,
+            companyId: user.companyId,
+            isActive: true,
+          },
+          select: {
+            customerId: true,
+          },
+        });
+        const portalCustomerIds = portalAccesses.map((entry) => entry.customerId);
 
         return {
           id: user.id,
@@ -81,6 +94,8 @@ export const authOptions: NextAuthOptions = {
           companyName: user.company.tradeName ?? user.company.legalName,
           branchId: defaultBranch?.id ?? null,
           branchCode: defaultBranch?.code ?? null,
+          isPortalUser: user.isPortalUser,
+          portalCustomerIds,
         };
       },
     }),
@@ -95,6 +110,8 @@ export const authOptions: NextAuthOptions = {
         token.companyName = authUser.companyName;
         token.branchId = authUser.branchId;
         token.branchCode = authUser.branchCode;
+        token.isPortalUser = authUser.isPortalUser ?? false;
+        token.portalCustomerIds = authUser.portalCustomerIds ?? [];
       }
       return token;
     },
@@ -106,6 +123,10 @@ export const authOptions: NextAuthOptions = {
         session.user.companyName = (token.companyName as string | undefined) ?? "";
         session.user.branchId = (token.branchId as string | null | undefined) ?? null;
         session.user.branchCode = (token.branchCode as string | null | undefined) ?? null;
+        session.user.isPortalUser = Boolean(token.isPortalUser);
+        session.user.portalCustomerIds = Array.isArray(token.portalCustomerIds)
+          ? token.portalCustomerIds
+          : [];
       }
       return session;
     },

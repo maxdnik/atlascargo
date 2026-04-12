@@ -30,7 +30,7 @@ export async function getDashboardKpis(companyId = DEFAULT_COMPANY_ID) {
         where: {
           companyId,
           status: {
-            in: [QuoteStatus.SENT, QuoteStatus.APPROVED, QuoteStatus.REJECTED],
+            in: [QuoteStatus.SENT, QuoteStatus.NEGOTIATION, QuoteStatus.APPROVED, QuoteStatus.REJECTED],
           },
         },
       }),
