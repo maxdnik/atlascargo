@@ -43,7 +43,6 @@ type ShipmentDetailViewModel = {
   incotermCode?: string | null;
   serviceLevel?: string | null;
   commodity?: string | null;
-  cargoReadyDate?: string | null;
   referenceClient?: string | null;
   referenceInternal?: string | null;
   shipmentNumber: string;
@@ -535,10 +534,6 @@ export function ShipmentDetailClient({
                 </p>
                 <p>
                   <span className="font-medium text-slate-900">Master Ref:</span> {shipment.masterRef ?? "-"}
-                </p>
-                <p>
-                  <span className="font-medium text-slate-900">Cargo Ready:</span>{" "}
-                  {dateLabel(shipment.cargoReadyDate, true)}
                 </p>
               </div>
             </div>
@@ -1384,9 +1379,6 @@ export function ShipmentDetailClient({
               volumeM3: shipment.volumeM3 ?? "",
               containerCount: shipment.containerCount ?? undefined,
               containerType: shipment.containerType ?? "",
-              cargoReadyDate: shipment.cargoReadyDate
-                ? new Date(shipment.cargoReadyDate).toISOString().slice(0, 16)
-                : "",
               etd: shipment.etd ? new Date(shipment.etd).toISOString().slice(0, 16) : "",
               eta: shipment.eta ? new Date(shipment.eta).toISOString().slice(0, 16) : "",
               deliveredAt: shipment.deliveredAt

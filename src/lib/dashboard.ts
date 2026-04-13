@@ -1,6 +1,9 @@
 import { prisma } from "@/lib/prisma";
 import { MilestoneStatus, QuoteStatus, ShipmentStatus } from "@prisma/client";
-import { SHIPMENT_MILESTONE_WORKFLOW } from "@/lib/shipment-milestones";
+import {
+  filterShipmentWorkflowMilestones,
+  SHIPMENT_MILESTONE_WORKFLOW,
+} from "@/lib/shipment-milestones";
 
 const DEFAULT_COMPANY_ID = "comp_atlascargo";
 
@@ -238,7 +241,8 @@ export async function getDashboardKpis(companyId = DEFAULT_COMPANY_ID) {
         masterRef: trackingSource.masterRef,
         bookingRef: trackingSource.bookingRef,
         steps: SHIPMENT_MILESTONE_WORKFLOW.map((milestone) => {
-          const row = trackingSource.milestones.find((item) => item.code === milestone.code);
+          const workflowMilestones = filterShipmentWorkflowMilestones(trackingSource.milestones);
+          const row = workflowMilestones.find((item) => item.code === milestone.code);
           const state =
             row?.status === MilestoneStatus.COMPLETED
               ? "done"

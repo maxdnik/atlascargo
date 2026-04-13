@@ -158,7 +158,6 @@ export default async function ShipmentEditPage({ params }: ShipmentEditPageProps
         incotermCode: shipment.incotermCode,
         serviceLevel: shipment.serviceLevel,
         commodity: shipment.commodity,
-        cargoReadyDate: shipment.cargoReadyDate?.toISOString() ?? null,
         referenceClient: shipment.referenceClient,
         referenceInternal: shipment.referenceInternal,
         shipmentNumber: shipment.shipmentNumber,

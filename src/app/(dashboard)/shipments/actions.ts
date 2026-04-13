@@ -19,8 +19,10 @@ import {
 import { enforceActionPermission } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import {
+  deriveShipmentStatusFromMilestones,
   getShipmentMilestoneLabel,
   isCriticalShipmentMilestone,
+  isShipmentWorkflowMilestone,
   SHIPMENT_MILESTONE_WORKFLOW,
 } from "@/lib/shipment-milestones";
 import {
@@ -84,7 +86,6 @@ const shipmentSchema = z.object({
   volumeM3: z.coerce.number().min(0).max(100_000).optional(),
   containerCount: z.coerce.number().int().min(0).max(100_000).optional(),
   containerType: z.string().max(80).optional(),
-  cargoReadyDate: z.string().optional(),
   etd: z.string().optional(),
   eta: z.string().optional(),
   atd: z.string().optional(),
@@ -106,21 +107,18 @@ const documentTypeOptions = Object.values(DocumentType);
 const defaultMilestones = SHIPMENT_MILESTONE_WORKFLOW;
 
 function parseOperationalDates(input: {
-  cargoReadyDate?: string;
   etd?: string;
   eta?: string;
   atd?: string;
   ata?: string;
   deliveredAt?: string;
 }) {
-  const cargoReadyDate = toDate(input.cargoReadyDate);
   const etd = toDate(input.etd);
   const eta = toDate(input.eta);
   const atd = toDate(input.atd);
   const ata = toDate(input.ata);
   const deliveredAt = toDate(input.deliveredAt);
   return {
-    cargoReadyDate,
     etd,
     eta,
     atd,
@@ -182,23 +180,18 @@ function resolveAmountBase({
 }
 
 function validateShipmentDates({
-  cargoReadyDate,
   etd,
   eta,
   atd,
   ata,
   deliveredAt,
 }: {
-  cargoReadyDate: Date | null;
   etd: Date | null;
   eta: Date | null;
   atd: Date | null;
   ata: Date | null;
   deliveredAt: Date | null;
 }) {
-  if (cargoReadyDate && etd && cargoReadyDate > etd) {
-    throw new Error("Cargo Ready Date cannot be later than ETD");
-  }
   if (etd && eta && etd > eta) {
     throw new Error("ETD cannot be later than ETA");
   }
@@ -222,7 +215,6 @@ function toMilestoneStatus(date: Date | null): MilestoneStatus {
 
 type MilestoneDates = {
   quoteApprovedAt: Date | null;
-  cargoReadyDate: Date | null;
   atd: Date | null;
   ata: Date | null;
   deliveredAt: Date | null;
@@ -238,11 +230,6 @@ function milestoneSeedData(shipmentId: string, dates: MilestoneDates) {
       expectedAt = dates.quoteApprovedAt;
       actualAt = dates.quoteApprovedAt;
       status = toMilestoneStatus(dates.quoteApprovedAt);
-    }
-    if (milestone.code === "CARGO_READY") {
-      expectedAt = dates.cargoReadyDate;
-      actualAt = dates.cargoReadyDate;
-      status = toMilestoneStatus(dates.cargoReadyDate);
     }
     if (milestone.code === "DEPARTED") {
       expectedAt = dates.atd;
@@ -298,6 +285,39 @@ function validateOperationalStatusRules(
       throw new Error("CLOSED requires booking reference and house/master reference");
     }
   }
+}
+
+function revalidateShipmentStatusSurfaces(shipmentId?: string) {
+  revalidatePath("/shipments");
+  if (shipmentId) {
+    revalidatePath(`/shipments/${shipmentId}`);
+  }
+  revalidatePath("/dashboard");
+  revalidatePath("/dashboard/action-center");
+}
+
+async function synchronizeShipmentStatusFromMilestones(
+  tx: Prisma.TransactionClient,
+  shipmentId: string,
+  currentStatus: ShipmentStatus,
+) {
+  const milestones = await tx.shipmentMilestone.findMany({
+    where: { shipmentId },
+    select: {
+      code: true,
+      status: true,
+      actualAt: true,
+    },
+  });
+  const nextStatus = deriveShipmentStatusFromMilestones(milestones, currentStatus);
+  if (nextStatus === currentStatus) {
+    return currentStatus;
+  }
+  await tx.shipment.update({
+    where: { id: shipmentId },
+    data: { status: nextStatus },
+  });
+  return nextStatus;
 }
 
 function resolveShipmentPrefix(mode: TransportMode, direction: TradeDirection) {
@@ -411,7 +431,6 @@ export async function createShipmentAction(
       volumeM3: formData.get("volumeM3") || undefined,
       containerCount: formData.get("containerCount") || undefined,
       containerType: formData.get("containerType") || undefined,
-      cargoReadyDate: String(formData.get("cargoReadyDate") || ""),
       etd: String(formData.get("etd") || ""),
       eta: String(formData.get("eta") || ""),
       atd: String(formData.get("atd") || ""),
@@ -421,15 +440,14 @@ export async function createShipmentAction(
     });
 
     const quoteId = normalizeOptional(parsed.quoteId);
-    const { cargoReadyDate, etd, eta, atd, ata, deliveredAt } = parseOperationalDates({
-      cargoReadyDate: parsed.cargoReadyDate,
+    const { etd, eta, atd, ata, deliveredAt } = parseOperationalDates({
       etd: parsed.etd,
       eta: parsed.eta,
       atd: parsed.atd,
       ata: parsed.ata,
       deliveredAt: parsed.deliveredAt,
     });
-    validateShipmentDates({ cargoReadyDate, etd, eta, atd, ata, deliveredAt });
+    validateShipmentDates({ etd, eta, atd, ata, deliveredAt });
 
     let approvedQuote:
       | {
@@ -577,7 +595,7 @@ export async function createShipmentAction(
           volumeM3: parsed.volumeM3 ?? null,
           containerCount: parsed.containerCount ?? null,
           containerType: normalizeOptional(parsed.containerType),
-          cargoReadyDate,
+          // Backward compatibility: keep legacy DB column null in active workflow.
           etd,
           eta,
           atd,
@@ -590,14 +608,19 @@ export async function createShipmentAction(
       await tx.shipmentMilestone.createMany({
         data: milestoneSeedData(shipment.id, {
           quoteApprovedAt: approvedQuote?.approvedAt ?? null,
-          cargoReadyDate,
           atd,
           ata,
           deliveredAt,
         }),
       });
 
-      return shipment;
+      const derivedStatus = await synchronizeShipmentStatusFromMilestones(
+        tx,
+        shipment.id,
+        shipment.status,
+      );
+
+      return { ...shipment, status: derivedStatus };
     });
 
     await prisma.activityLog.create({
@@ -615,8 +638,7 @@ export async function createShipmentAction(
       },
     });
 
-    revalidatePath("/shipments");
-    revalidatePath("/dashboard");
+    revalidateShipmentStatusSurfaces(created.id);
 
     return { success: true };
   } catch (error) {
@@ -673,7 +695,6 @@ export async function updateShipmentAction(
       volumeM3: formData.get("volumeM3") || undefined,
       containerCount: formData.get("containerCount") || undefined,
       containerType: formData.get("containerType") || undefined,
-      cargoReadyDate: String(formData.get("cargoReadyDate") || ""),
       etd: String(formData.get("etd") || ""),
       eta: String(formData.get("eta") || ""),
       atd: String(formData.get("atd") || ""),
@@ -694,20 +715,18 @@ export async function updateShipmentAction(
     }
 
     const parsedDates = parseOperationalDates({
-      cargoReadyDate: parsed.cargoReadyDate,
       etd: parsed.etd,
       eta: parsed.eta,
       atd: parsed.atd,
       ata: parsed.ata,
       deliveredAt: parsed.deliveredAt,
     });
-    const cargoReadyDate = parsedDates.cargoReadyDate;
     const etd = parsedDates.etd;
     const eta = parsedDates.eta;
     const atd = formData.has("atd") ? parsedDates.atd : before.atd;
     const ata = formData.has("ata") ? parsedDates.ata : before.ata;
     const deliveredAt = parsedDates.deliveredAt;
-    validateShipmentDates({ cargoReadyDate, etd, eta, atd, ata, deliveredAt });
+    validateShipmentDates({ etd, eta, atd, ata, deliveredAt });
 
     const customer = await prisma.customer.findFirst({
       where: {
@@ -783,7 +802,6 @@ export async function updateShipmentAction(
           volumeM3: parsed.volumeM3 ?? null,
           containerCount: parsed.containerCount ?? null,
           containerType: normalizeOptional(parsed.containerType),
-          cargoReadyDate,
           etd,
           eta,
           atd,
@@ -794,7 +812,6 @@ export async function updateShipmentAction(
       });
 
       const milestoneUpdates = [
-        { code: "CARGO_READY", label: "Cargo Ready", actualAt: cargoReadyDate },
         { code: "DEPARTED", label: "Departed", actualAt: atd },
         { code: "ARRIVED", label: "Arrived", actualAt: ata },
         { code: "DELIVERED", label: "Delivered", actualAt: deliveredAt },
@@ -825,7 +842,13 @@ export async function updateShipmentAction(
         });
       }
 
-      return shipment;
+      const derivedStatus = await synchronizeShipmentStatusFromMilestones(
+        tx,
+        shipment.id,
+        shipment.status,
+      );
+
+      return { ...shipment, status: derivedStatus };
     });
 
     await prisma.activityLog.create({
@@ -840,9 +863,7 @@ export async function updateShipmentAction(
       },
     });
 
-    revalidatePath("/shipments");
-    revalidatePath(`/shipments/${updated.id}`);
-    revalidatePath("/dashboard");
+    revalidateShipmentStatusSurfaces(updated.id);
 
     return { success: true };
   } catch (error) {
@@ -854,7 +875,6 @@ export async function updateShipmentAction(
 const milestoneUpdateSchema = z.object({
   shipmentId: z.string().min(1),
   code: z.string().min(1).max(60),
-  expectedAt: z.string().optional(),
   actualAt: z.string().optional(),
   status: z.nativeEnum(MilestoneStatus).optional(),
   notes: z.string().max(600).optional(),
@@ -1726,7 +1746,6 @@ export async function upsertMilestoneAction(
     const parsed = milestoneUpdateSchema.parse({
       shipmentId: formData.get("shipmentId"),
       code: formData.get("code"),
-      expectedAt: formData.has("expectedAt") ? String(formData.get("expectedAt") || "") : undefined,
       actualAt: String(formData.get("actualAt") || ""),
       status: formData.get("status") || undefined,
       notes: formData.get("notes") || undefined,
@@ -1739,47 +1758,50 @@ export async function upsertMilestoneAction(
       },
       select: {
         id: true,
+        status: true,
       },
     });
     if (!shipment) {
       throw new Error("Shipment not found");
     }
+    if (!isShipmentWorkflowMilestone(parsed.code)) {
+      return { success: true };
+    }
 
-    const expectedAt = toDate(parsed.expectedAt);
     const actualAt = toDate(parsed.actualAt);
     const normalizedNotes = normalizeOptional(parsed.notes);
     const status = parsed.status ?? (actualAt ? MilestoneStatus.COMPLETED : MilestoneStatus.PENDING);
     const label = getShipmentMilestoneLabel(parsed.code);
-    const hasExpectedAtInput = formData.has("expectedAt");
 
-    await prisma.shipmentMilestone.upsert({
-      where: {
-        shipmentId_code: {
+    await prisma.$transaction(async (tx) => {
+      await tx.shipmentMilestone.upsert({
+        where: {
+          shipmentId_code: {
+            shipmentId: shipment.id,
+            code: parsed.code,
+          },
+        },
+        create: {
           shipmentId: shipment.id,
           code: parsed.code,
+          label,
+          actualAt,
+          status,
+          comment: normalizedNotes,
+          isCritical: isCriticalShipmentMilestone(parsed.code),
         },
-      },
-      create: {
-        shipmentId: shipment.id,
-        code: parsed.code,
-        label,
-        ...(hasExpectedAtInput ? { expectedAt } : {}),
-        actualAt,
-        status,
-        comment: normalizedNotes,
-        isCritical: isCriticalShipmentMilestone(parsed.code),
-      },
-      update: {
-        label,
-        ...(hasExpectedAtInput ? { expectedAt } : {}),
-        actualAt,
-        status,
-        comment: normalizedNotes,
-      },
+        update: {
+          label,
+          actualAt,
+          status,
+          comment: normalizedNotes,
+        },
+      });
+
+      await synchronizeShipmentStatusFromMilestones(tx, shipment.id, shipment.status);
     });
 
-    revalidatePath(`/shipments/${shipment.id}`);
-    revalidatePath("/shipments");
+    revalidateShipmentStatusSurfaces(shipment.id);
     return { success: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
@@ -1867,14 +1889,19 @@ export async function createShipmentFromQuoteAction(
       await tx.shipmentMilestone.createMany({
         data: milestoneSeedData(shipment.id, {
           quoteApprovedAt: quote.approvedAt ?? null,
-          cargoReadyDate: null,
           atd: null,
           ata: null,
           deliveredAt: null,
         }),
       });
 
-      return shipment;
+      const derivedStatus = await synchronizeShipmentStatusFromMilestones(
+        tx,
+        shipment.id,
+        shipment.status,
+      );
+
+      return { ...shipment, status: derivedStatus };
     });
 
     await prisma.activityLog.create({
@@ -1892,9 +1919,8 @@ export async function createShipmentFromQuoteAction(
       },
     });
 
-    revalidatePath("/shipments");
+    revalidateShipmentStatusSurfaces(created.id);
     revalidatePath("/quotes");
-    revalidatePath(`/shipments/${created.id}`);
     return { success: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
@@ -1939,8 +1965,7 @@ export async function deleteShipmentAction(
       },
     });
 
-    revalidatePath("/shipments");
-    revalidatePath("/dashboard");
+    revalidateShipmentStatusSurfaces();
 
     return { success: true };
   } catch (error) {

@@ -7,7 +7,10 @@ import {
   upsertMilestoneAction,
   type ShipmentActionState,
 } from "@/app/(dashboard)/shipments/actions";
-import { sortShipmentMilestones } from "@/lib/shipment-milestones";
+import {
+  filterShipmentWorkflowMilestones,
+  sortShipmentMilestones,
+} from "@/lib/shipment-milestones";
 
 type MilestoneRow = {
   id: string;
@@ -123,7 +126,7 @@ export function MilestoneTimeline({ shipmentId, milestones }: MilestoneTimelineP
     return <p className="text-sm text-slate-500">No milestones configured for this shipment.</p>;
   }
 
-  const orderedMilestones = sortShipmentMilestones(milestones);
+  const orderedMilestones = sortShipmentMilestones(filterShipmentWorkflowMilestones(milestones));
 
   return (
     <div className="space-y-3">

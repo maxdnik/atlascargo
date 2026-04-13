@@ -1,7 +1,7 @@
 import { ShipmentStatus, TransportMode } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
-import { sortShipmentMilestones } from "@/lib/shipment-milestones";
+import { filterShipmentWorkflowMilestones, sortShipmentMilestones } from "@/lib/shipment-milestones";
 
 type ShipmentListFilters = {
   q?: string;
@@ -154,7 +154,7 @@ export async function getShipmentById(companyId: string, id: string) {
 
   return {
     ...shipment,
-    milestones: sortShipmentMilestones(shipment.milestones),
+    milestones: sortShipmentMilestones(filterShipmentWorkflowMilestones(shipment.milestones)),
   };
 }
 
