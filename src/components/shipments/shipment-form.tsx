@@ -45,11 +45,8 @@ type ShipmentDefaults = {
   volumeM3?: string | null;
   containerCount?: number | null;
   containerType?: string;
-  cargoReadyDate?: string;
   etd?: string;
   eta?: string;
-  atd?: string;
-  ata?: string;
   deliveredAt?: string;
   notes?: string;
 };
@@ -425,15 +422,6 @@ export function ShipmentForm({ action, defaults, customers, submitLabel }: Shipm
         <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-700">Operational dates</h2>
         <div className="grid gap-4 md:grid-cols-3">
           <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">Cargo Ready</label>
-            <input
-              type="datetime-local"
-              name="cargoReadyDate"
-              defaultValue={defaults?.cargoReadyDate ?? ""}
-              className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-            />
-          </div>
-          <div>
             <label className="mb-1 block text-sm font-medium text-slate-700">ETD</label>
             <input
               type="datetime-local"
@@ -448,24 +436,6 @@ export function ShipmentForm({ action, defaults, customers, submitLabel }: Shipm
               type="datetime-local"
               name="eta"
               defaultValue={defaults?.eta ?? ""}
-              className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-            />
-          </div>
-          <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">ATD</label>
-            <input
-              type="datetime-local"
-              name="atd"
-              defaultValue={defaults?.atd ?? ""}
-              className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-            />
-          </div>
-          <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">ATA</label>
-            <input
-              type="datetime-local"
-              name="ata"
-              defaultValue={defaults?.ata ?? ""}
               className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
             />
           </div>

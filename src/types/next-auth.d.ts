@@ -9,6 +9,8 @@ declare module "next-auth" {
       branchCode?: string | null;
       companyName?: string;
       role: UserRole;
+      isPortalUser?: boolean;
+      portalCustomerIds?: string[];
       name?: string | null;
       email?: string | null;
     };
@@ -21,6 +23,8 @@ declare module "next-auth" {
     branchCode?: string | null;
     companyName?: string;
     role: UserRole;
+    isPortalUser?: boolean;
+    portalCustomerIds?: string[];
   }
 }
 
@@ -32,5 +36,7 @@ declare module "next-auth/jwt" {
     branchCode?: string | null;
     companyName?: string;
     role: UserRole;
+    isPortalUser?: boolean;
+    portalCustomerIds?: string[];
   }
 }

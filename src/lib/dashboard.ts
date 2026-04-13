@@ -1,5 +1,9 @@
 import { prisma } from "@/lib/prisma";
 import { MilestoneStatus, QuoteStatus, ShipmentStatus } from "@prisma/client";
+import {
+  filterShipmentWorkflowMilestones,
+  SHIPMENT_MILESTONE_WORKFLOW,
+} from "@/lib/shipment-milestones";
 
 const DEFAULT_COMPANY_ID = "comp_atlascargo";
 
@@ -30,7 +34,7 @@ export async function getDashboardKpis(companyId = DEFAULT_COMPANY_ID) {
         where: {
           companyId,
           status: {
-            in: [QuoteStatus.SENT, QuoteStatus.APPROVED, QuoteStatus.REJECTED],
+            in: [QuoteStatus.SENT, QuoteStatus.NEGOTIATION, QuoteStatus.APPROVED, QuoteStatus.REJECTED],
           },
         },
       }),
@@ -74,7 +78,7 @@ export async function getDashboardKpis(companyId = DEFAULT_COMPANY_ID) {
         milestones: {
           where: {
             code: {
-              in: ["ORIGIN_PICKED_UP", "IN_TRANSIT", "CUSTOMS", "DELIVERED"],
+              in: SHIPMENT_MILESTONE_WORKFLOW.map((milestone) => milestone.code),
             },
           },
           select: {
@@ -236,50 +240,21 @@ export async function getDashboardKpis(companyId = DEFAULT_COMPANY_ID) {
         houseRef: trackingSource.houseRef,
         masterRef: trackingSource.masterRef,
         bookingRef: trackingSource.bookingRef,
-        steps: [
-          {
-            label: "Origin picked up",
-            state: trackingSource.milestones.some(
-              (item) => item.code === "ORIGIN_PICKED_UP" && item.status === MilestoneStatus.COMPLETED,
-            )
+        steps: SHIPMENT_MILESTONE_WORKFLOW.map((milestone) => {
+          const workflowMilestones = filterShipmentWorkflowMilestones(trackingSource.milestones);
+          const row = workflowMilestones.find((item) => item.code === milestone.code);
+          const state =
+            row?.status === MilestoneStatus.COMPLETED
               ? "done"
-              : "pending",
-            description: "Origin handover and consolidation",
-          },
-          {
-            label: "In transit",
-            state:
-              trackingSource.status === ShipmentStatus.IN_TRANSIT
+              : row?.status === MilestoneStatus.IN_PROGRESS
                 ? "current"
-                : trackingSource.status === ShipmentStatus.ARRIVED ||
-                    trackingSource.status === ShipmentStatus.CUSTOMS ||
-                    trackingSource.status === ShipmentStatus.DELIVERED ||
-                    trackingSource.status === ShipmentStatus.CLOSED
-                  ? "done"
-                  : "pending",
-            description: "Main carriage movement",
-          },
-          {
-            label: "Customs",
-            state:
-              trackingSource.status === ShipmentStatus.CUSTOMS
-                ? "current"
-                : trackingSource.status === ShipmentStatus.DELIVERED ||
-                    trackingSource.status === ShipmentStatus.CLOSED
-                  ? "done"
-                  : "pending",
-            description: "Clearance and inspections",
-          },
-          {
-            label: "Delivered",
-            state:
-              trackingSource.status === ShipmentStatus.DELIVERED ||
-              trackingSource.status === ShipmentStatus.CLOSED
-                ? "done"
-                : "pending",
-            description: "Final handover completed",
-          },
-        ],
+                : "pending";
+          return {
+            label: milestone.label,
+            state,
+            description: row?.actualAt ? `Recorded at ${row.actualAt.toLocaleString()}` : "No date recorded",
+          };
+        }),
       }
     : null;
 

@@ -34,6 +34,7 @@ import {
 } from "@/app/(dashboard)/finance/actions";
 import { MilestoneTimeline } from "@/components/shipments/milestone-timeline";
 import { ShipmentForm } from "@/components/shipments/shipment-form";
+import { sortShipmentMilestones } from "@/lib/shipment-milestones";
 
 type ShipmentDetailViewModel = {
   id: string;
@@ -42,7 +43,6 @@ type ShipmentDetailViewModel = {
   incotermCode?: string | null;
   serviceLevel?: string | null;
   commodity?: string | null;
-  cargoReadyDate?: string | null;
   referenceClient?: string | null;
   referenceInternal?: string | null;
   shipmentNumber: string;
@@ -56,8 +56,6 @@ type ShipmentDetailViewModel = {
   destinationCode?: string | null;
   etd?: string | null;
   eta?: string | null;
-  atd?: string | null;
-  ata?: string | null;
   deliveredAt?: string | null;
   pol?: string | null;
   pod?: string | null;
@@ -106,7 +104,6 @@ type ShipmentDetailViewModel = {
     code: string;
     label: string;
     status: MilestoneStatus;
-    expectedAt?: string | null;
     actualAt?: string | null;
     comment?: string | null;
   }>;
@@ -118,6 +115,7 @@ type ShipmentDetailViewModel = {
     issueDate?: string | null;
     version: number;
     status: DocumentRecordStatus;
+    isClientVisible: boolean;
     notes?: string | null;
   }>;
   revenues: Array<{
@@ -405,11 +403,12 @@ export function ShipmentDetailClient({
     invoiceInitialState,
   );
   const timeline = useMemo(() => {
-    return shipment.milestones.map((m, index) => ({
+    const ordered = sortShipmentMilestones(shipment.milestones);
+    return ordered.map((m, index) => ({
       ...m,
       isCurrent: m.status === "IN_PROGRESS",
       isDone: m.status === "COMPLETED",
-      isLast: index === shipment.milestones.length - 1,
+      isLast: index === ordered.length - 1,
     }));
   }, [shipment.milestones]);
 
@@ -490,10 +489,9 @@ export function ShipmentDetailClient({
                         <p className="text-sm font-semibold text-slate-900">{step.label}</p>
                         <span className="text-xs font-medium text-slate-500">{step.status}</span>
                       </div>
-                      <div className="mt-1 grid gap-1 text-xs text-slate-600 md:grid-cols-2">
-                        <p>Expected: {dateLabel(step.expectedAt, true)}</p>
-                        <p>Actual: {dateLabel(step.actualAt, true)}</p>
-                      </div>
+                      <p className="mt-1 text-xs text-slate-600">
+                        {step.actualAt ? dateLabel(step.actualAt, true) : "No date recorded"}
+                      </p>
                     </div>
                   </li>
                 ))}
@@ -536,16 +534,6 @@ export function ShipmentDetailClient({
                 </p>
                 <p>
                   <span className="font-medium text-slate-900">Master Ref:</span> {shipment.masterRef ?? "-"}
-                </p>
-                <p>
-                  <span className="font-medium text-slate-900">ATD:</span> {dateLabel(shipment.atd, true)}
-                </p>
-                <p>
-                  <span className="font-medium text-slate-900">ATA:</span> {dateLabel(shipment.ata, true)}
-                </p>
-                <p>
-                  <span className="font-medium text-slate-900">Cargo Ready:</span>{" "}
-                  {dateLabel(shipment.cargoReadyDate, true)}
                 </p>
               </div>
             </div>
@@ -849,6 +837,7 @@ export function ShipmentDetailClient({
                         <p>Ref: {doc.referenceNumber ?? "-"}</p>
                         <p>Issue: {dateLabel(doc.issueDate)}</p>
                         <p>Version: {doc.version}</p>
+                        <p>Client visible: {doc.isClientVisible ? "Yes" : "No"}</p>
                       </div>
                       {canDeleteDocuments ? (
                         <form action={deleteDocumentAction} className="mt-2">
@@ -881,6 +870,14 @@ export function ShipmentDetailClient({
                     <select name="status" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm">
                       {Object.values(DocumentRecordStatus).map((status) => <option key={status} value={status}>{status}</option>)}
                     </select>
+                    <label className="inline-flex items-center gap-2 text-xs text-slate-700">
+                      <input
+                        type="checkbox"
+                        name="isClientVisible"
+                        className="h-4 w-4 rounded border-slate-300"
+                      />
+                      Visible in client portal
+                    </label>
                     <textarea name="notes" rows={2} placeholder="Internal notes" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
                     <button type="submit" className="rounded-lg bg-sky-600 px-3 py-2 text-xs font-medium text-white transition hover:bg-sky-500">
                       Save document
@@ -910,6 +907,14 @@ export function ShipmentDetailClient({
                     <select name="status" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm">
                       {Object.values(DocumentRecordStatus).map((status) => <option key={status} value={status}>{status}</option>)}
                     </select>
+                    <label className="inline-flex items-center gap-2 text-xs text-slate-700">
+                      <input
+                        type="checkbox"
+                        name="isClientVisible"
+                        className="h-4 w-4 rounded border-slate-300"
+                      />
+                      Visible in client portal
+                    </label>
                     <textarea name="notes" rows={2} placeholder="Internal notes" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
                     <button type="submit" className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-50">
                       Update document
@@ -1313,7 +1318,6 @@ export function ShipmentDetailClient({
             id: milestone.id,
             code: milestone.code,
             label: milestone.label,
-            expectedAt: milestone.expectedAt ?? null,
             actualAt: milestone.actualAt ?? null,
             status: milestone.status,
             comment: milestone.comment ?? null,
@@ -1375,13 +1379,8 @@ export function ShipmentDetailClient({
               volumeM3: shipment.volumeM3 ?? "",
               containerCount: shipment.containerCount ?? undefined,
               containerType: shipment.containerType ?? "",
-              cargoReadyDate: shipment.cargoReadyDate
-                ? new Date(shipment.cargoReadyDate).toISOString().slice(0, 16)
-                : "",
               etd: shipment.etd ? new Date(shipment.etd).toISOString().slice(0, 16) : "",
               eta: shipment.eta ? new Date(shipment.eta).toISOString().slice(0, 16) : "",
-              atd: shipment.atd ? new Date(shipment.atd).toISOString().slice(0, 16) : "",
-              ata: shipment.ata ? new Date(shipment.ata).toISOString().slice(0, 16) : "",
               deliveredAt: shipment.deliveredAt
                 ? new Date(shipment.deliveredAt).toISOString().slice(0, 16)
                 : "",

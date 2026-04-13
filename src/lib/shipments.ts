@@ -1,6 +1,7 @@
 import { ShipmentStatus, TransportMode } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
+import { filterShipmentWorkflowMilestones, sortShipmentMilestones } from "@/lib/shipment-milestones";
 
 type ShipmentListFilters = {
   q?: string;
@@ -70,7 +71,7 @@ export async function listShipments(companyId: string, filters?: ShipmentListFil
 }
 
 export async function getShipmentById(companyId: string, id: string) {
-  return prisma.shipment.findFirst({
+  const shipment = await prisma.shipment.findFirst({
     where: { id, companyId },
     include: {
       customer: {
@@ -113,9 +114,7 @@ export async function getShipmentById(companyId: string, id: string) {
           },
         },
       },
-      milestones: {
-        orderBy: [{ expectedAt: "asc" }, { createdAt: "asc" }],
-      },
+      milestones: true,
       documents: {
         orderBy: [{ uploadedAt: "desc" }, { createdAt: "desc" }],
       },
@@ -148,6 +147,15 @@ export async function getShipmentById(companyId: string, id: string) {
       },
     },
   });
+
+  if (!shipment) {
+    return null;
+  }
+
+  return {
+    ...shipment,
+    milestones: sortShipmentMilestones(filterShipmentWorkflowMilestones(shipment.milestones)),
+  };
 }
 
 export async function deleteShipmentById(companyId: string, id: string) {
