@@ -17,8 +17,8 @@ Servir `dist/` como sitio estático. En Vercel: root directory `portal`, framewo
 
 - Panel y navegación responsive con identidad Atlas Cargo.
 - Creación y edición de expedientes de importación/exportación, filtros y búsqueda.
-- Estados de transporte separados de estado aduanero, canal y libramiento.
-- Secuencias distintas: exportación requiere libramiento de origen antes de salida internacional.
+- Estados de transporte separados de estado aduanero, canal y liberación.
+- Secuencias distintas: exportación requiere liberación de origen antes de salida internacional.
 - ETD/ETA estimadas independientes de ATD/ATA reales; validación de fechas.
 - Cut-off de terminal, VGM y shipping instructions; vencimientos de contenedor y terminal separados.
 - Checklist documental por modalidad y dirección; recibido y verificado son estados distintos.
@@ -52,7 +52,7 @@ La migración conserva cambios existentes y nunca publica automáticamente adjun
 | Expediente | Shipment | Persistir con permisos y companyId del servidor |
 | Cliente / CUIT | Customer | Validación y relación real de cliente |
 | Transporte y fechas | Shipment / ShipmentMilestone | Integrar hitos con fechas confirmadas |
-| Registro aduanero | Campos nuevos relacionados con Shipment | Destinación, canal, NCM, libramiento y auditoría |
+| Registro aduanero | Campos nuevos relacionados con Shipment | Destinación, canal, NCM, liberación y auditoría |
 | Documentación | ShipmentDocument | Almacenamiento privado durable y permisos de descarga |
 | Tareas | Task | Asignaciones a User, notificaciones y vencimientos reales |
 | Cotizaciones | Quote / QuoteCharge | Conversión transaccional a Shipment |
@@ -62,7 +62,7 @@ Antes de habilitar operaciones reales: provisionar una base exclusiva desde Verc
 
 ## Criterios operativos
 
-Las fechas de días libres son contractuales, no plazos legales universales. El canal verde no implica automáticamente libramiento. La clasificación NCM, las intervenciones, los documentos condicionales y los tributos requieren validación por mercadería y régimen. No se calcula una tasa aduanera genérica.
+Las fechas de días libres son contractuales, no plazos legales universales. El canal verde no implica automáticamente liberación. La clasificación NCM, las intervenciones, los documentos condicionales y los tributos requieren validación por mercadería y régimen. No se calcula una tasa aduanera genérica.
 
 Fuentes oficiales consultadas el 30/10/2026:
 
@@ -72,7 +72,7 @@ Fuentes oficiales consultadas el 30/10/2026:
 
 ## Validación
 
-`npm test` prueba secuencia de importación/exportación, bloqueos de transición sin libramiento/arribo, plazos, cierre independiente de almacenaje y devolución de vacío, documentos por modalidad, CSV y CUIT. La revisión visual y de interacción usa la vista previa de Sites.
+`npm test` prueba secuencia de importación/exportación, bloqueos de transición sin liberación/arribo, plazos, cierre independiente de almacenaje y devolución de vacío, documentos por modalidad, CSV y CUIT. La revisión visual y de interacción usa la vista previa de Sites.
 
 
 ## Rediseño UX/UI y referencias de transporte · 30/10/2026

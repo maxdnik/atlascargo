@@ -2,7 +2,7 @@ import {transportDocuments,demoReferences} from './shipment-model.mjs';
 import {DEMO_CUSTOMERS} from './client-access.mjs';
 export const TODAY='2026-10-30';
 export const STATUS={DRAFT:'En preparación',BOOKING_CONFIRMED:'Reserva confirmada',IN_TRANSIT:'En tránsito',ARRIVED:'Arribado',CUSTOMS:'En aduana',DELIVERED:'Entregado',CANCELLED:'Cancelado'};
-export const CUSTOMS={PENDING:'Sin oficializar',OFFICIALIZED:'Oficializado',CONTROL:'En control',RELEASED:'Librado'};
+export const CUSTOMS={PENDING:'Sin oficializar',OFFICIALIZED:'Oficializado',CONTROL:'En control',RELEASED:'Liberado'};
 export const MODES={OCEAN:'Marítimo FCL',LCL:'Marítimo LCL',AIR:'Aéreo',ROAD:'Terrestre'};
 export const DIRECTIONS={IMPORT:'Importación',EXPORT:'Exportación'};
 export const DOC_STATUS={PENDING:'Pendiente',RECEIVED:'Recibido',VERIFIED:'Verificado',NA:'No aplica'};
@@ -18,8 +18,8 @@ export function checklist(direction,mode){return [
   {clientVisible:false,id:'permits',label:'Intervenciones de terceros organismos',required:false,status:'NA'},
   {clientVisible:false,id:'pod',label:'Constancia de entrega · POD',required:false,status:'PENDING'}];}
 export function transitionError(op,next){
-  if(next==='DELIVERED'&&op.customs!=='RELEASED')return 'Registrá el libramiento aduanero antes de confirmar la entrega.';
-  if(next==='IN_TRANSIT'&&op.direction==='EXPORT'&&op.customs!=='RELEASED')return 'La exportación necesita libramiento en origen antes de registrar la salida internacional.';
+  if(next==='DELIVERED'&&op.customs!=='RELEASED')return 'Registrá la liberación aduanera antes de confirmar la entrega.';
+  if(next==='IN_TRANSIT'&&op.direction==='EXPORT'&&op.customs!=='RELEASED')return 'La exportación necesita liberación en origen antes de registrar la salida internacional.';
   if(next==='DELIVERED'&&!op.ata)return 'Completá la fecha de arribo real (ATA) antes de confirmar la entrega.';
   return null;
 }
@@ -36,7 +36,7 @@ export function alertsFor(ops,tasks,today=TODAY){
  return alerts;
 }
 export function timeline(o){
- const steps=o.direction==='EXPORT'?[['Reserva confirmada','booking'],['Libramiento en origen','customs'],['Salida internacional','departure'],['Arribo a destino','arrival'],['Entrega al consignatario','delivery']]:[['Reserva confirmada','booking'],['Salida de origen','departure'],['Arribo a Argentina','arrival'],['Libramiento aduanero','customs'],['Entrega al cliente','delivery']];
+ const steps=o.direction==='EXPORT'?[['Reserva confirmada','booking'],['Liberación en origen','customs'],['Salida internacional','departure'],['Arribo a destino','arrival'],['Entrega al consignatario','delivery']]:[['Reserva confirmada','booking'],['Salida de origen','departure'],['Arribo a Argentina','arrival'],['Liberación aduanera','customs'],['Entrega al cliente','delivery']];
  const complete={booking:o.status!=='DRAFT',departure:!!o.atd,arrival:!!o.ata,customs:o.customs==='RELEASED',delivery:!!o.delivered};
  let active=false;
  return steps.map(([label,key])=>{const done=complete[key];const current=!done&&!active;if(current)active=true;return {label,key,done,current,date:({booking:o.bookingDate,departure:o.atd,arrival:o.ata,customs:o.released,delivery:o.delivered})[key],expected:({departure:o.etd,arrival:o.eta})[key]};});

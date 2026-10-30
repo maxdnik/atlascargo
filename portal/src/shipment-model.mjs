@@ -1,10 +1,10 @@
 export function referenceFields(mode) {
-  const common=[{key:'booking',label:'Booking',description:'Número de reserva del transportista'}];
+  const common=[{key:'booking',label:'Booking'}];
   const transport=mode==='AIR'?
-    [{key:'mawb',label:'MAWB / AWB',description:'Guía aérea master · aerolínea'},{key:'hawb',label:'HAWB',description:'Guía aérea house · forwarder'}]:mode==='ROAD'?
-    [{key:'crt',label:'CRT',description:'Carta de porte internacional'}]:
-    [{key:'mbl',label:'MBL',description:'Master Bill of Lading · naviera'},{key:'hbl',label:'HBL',description:'House Bill of Lading · forwarder'}];
-  return [...common,...transport,{key:'customerReference',label:'Tu referencia / OC',description:'Orden de compra o referencia del cliente'}];
+    [{key:'mawb',label:'MAWB / AWB'},{key:'hawb',label:'HAWB'}]:mode==='ROAD'?
+    [{key:'crt',label:'CRT'}]:
+    [{key:'mbl',label:'MBL'},{key:'hbl',label:'HBL'}];
+  return [...common,...transport,{key:'customerReference',label:'Tu referencia / OC'}];
 }
 export function transportDocuments(mode) {
   return referenceFields(mode).filter(f=>!['booking','customerReference'].includes(f.key)).map((f,i)=>({id:f.key,label:f.label+' · '+(f.key==='crt'?'Carta de porte':f.key==='mbl'?'Conocimiento master':f.key==='hbl'?'Conocimiento house':f.key==='mawb'?'Guía aérea master':'Guía aérea house'),required:i===0,status:'PENDING',clientVisible:false}));
