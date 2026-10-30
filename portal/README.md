@@ -33,6 +33,18 @@ Es una **demo**, no el ERP de producción. Usa datos ficticios, fecha de referen
 
 La creación de un proyecto Neon separado fue rechazada por el proveedor: la organización está administrada por Vercel. No se reutilizó la base de DePerritos ni se conectó una base ajena. La conexión y el aprovisionamiento del almacenamiento de producción quedan pendientes.
 
+## Vista de importadores y exportadores
+
+El selector **Vista demo** permite comparar Equipo Atlas (gestión), Importador (Industrias del Sur) y Exportador (Pampa Alimentos). También se puede abrir `?vista=importador` o `?vista=exportador`. Estos parámetros seleccionan una demostración; no autentican ni autorizan usuarios.
+
+El portal de clientes recibe una proyección explícita por `customerId`: únicamente embarques de esa empresa, estados de transporte y aduana, fechas, seguimiento y documentos publicados. No recibe costos, márgenes, cotizaciones, tareas, observaciones internas ni historial interno. Un cliente puede tener tanto importaciones como exportaciones; la dirección no determina su acceso.
+
+Atlas controla la opción **Visible al cliente** de cada documento. Los nuevos archivos y los reemplazos quedan internos hasta que Atlas los comparte expresamente. El cliente puede consultar y descargar documentos compartidos; no puede crear operaciones, modificar estados, subir archivos ni administrar clientes. La descarga de la demo vuelve a comprobar empresa, embarque y publicación antes de leer el archivo local.
+
+La migración conserva cambios existentes y nunca publica automáticamente adjuntos previos. Los nuevos expedientes seleccionan una identidad explícita de cliente; una razón social escrita como nuevo cliente no se vincula por coincidencia de nombre.
+
+**No es una barrera de seguridad de producción:** todos los datos ficticios siguen en el bundle/localStorage y el selector permite volver a Atlas. Para clientes reales, el backend debe obtener `customerId` de la sesión autenticada, rechazar escrituras de clientes, filtrar cada consulta/contador por ese ID y autorizar cada descarga privada. El selector se elimina en ese entorno. No cargar documentación real en esta demo pública.
+
 ## Correspondencia con el ERP revisado
 
 | Portal | Modelo existente | Trabajo pendiente para producción |
