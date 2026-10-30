@@ -73,3 +73,24 @@ Fuentes oficiales consultadas el 30/10/2026:
 ## Validación
 
 `npm test` prueba secuencia de importación/exportación, bloqueos de transición sin libramiento/arribo, plazos, cierre independiente de almacenaje y devolución de vacío, documentos por modalidad, CSV y CUIT. La revisión visual y de interacción usa la vista previa de Sites.
+
+
+## Rediseño UX/UI y referencias de transporte · 30/10/2026
+
+- Tarjetas como vista inicial, lista opcional, filtros por estado/dirección/modalidad y búsqueda tolerante a acentos por booking, master, house, contenedor o referencia del cliente. Exportación CSV de la vista filtrada para Atlas.
+- Booking separado de MBL/HBL marítimos, MAWB/AWB y HAWB aéreos y CRT terrestre. Números editables en creación/detalle, copiables y consultables en el portal de clientes.
+- Expediente agrupado en Resumen, Seguimiento, Aduana, Documentos, Costos y Actividad para Atlas; el cliente conserva sólo Resumen, Seguimiento y Documentos.
+- Documentos en tarjetas con número, estado, archivo y visibilidad; carga global pide primero el embarque. Documentos master y house separados. House es condicional, no un requisito universal.
+- Formularios por modalidad, plazos secundarios desplegables, tipografía y contraste mayores, botones accesibles, tarjetas móviles sin desplazamiento horizontal y guía de siglas para clientes.
+- Migración aditiva: conserva IDs, números existentes (incluso vacíos intencionales), decisiones de publicación y adjuntos anteriores. No reclasifica automáticamente un BL/AWB anterior como master o house; agrega nuevas categorías internas pendientes. Los valores iniciales con prefijo DEMO son ficticios.
+
+Se revisaron páginas oficiales públicas; los patrones se adaptaron a Atlas, sin reproducir software ni prometer integraciones de proveedores:
+
+| Referencia | Criterio adaptado |
+|---|---|
+| [GoFreight · List views](https://gofreight.com/knowledge/how-to-use-list-views-in-gofreight) y [Doc Center](https://gofreight.com/knowledge/how-to-manage-shipment-documents) | Separación master/house, filtros y centro documental |
+| [CargoWise Neo](https://www.cargowise.com/solutions/cargowise-neo/) | Seguimiento por embarque y filtros orientados al usuario |
+| [Magaya Digital Freight Portal](https://www.magaya.com/digital-freight-portal/) | Información y documentos reunidos en el portal de clientes |
+| [Logixboard Portal](https://www.logixboard.com/products/portal) | Hitos y detalle de operación consultables en un solo lugar |
+
+Validación adicional: 18 pruebas de dominio/proyección/migración/búsqueda aprobadas, build estático, búsqueda HBL, cambio tarjetas/lista, copia de número, edición y persistencia de booking/MAWB/HAWB, revisión visual de portal, documentos y ancho móvil de 390 px. No se modificó el esquema del ERP ni se habilitó autenticación real.
