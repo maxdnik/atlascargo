@@ -1,0 +1,9 @@
+{
+  "name": "atlas-cargo-operaciones",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {"build": "node build.mjs", "test": "node --test src/domain.test.mjs"},
+  "dependencies": {"react": "19.2.4", "react-dom": "19.2.4", "lucide-react": "1.7.0"},
+  "devDependencies": {"esbuild": "0.25.12"}
+}
