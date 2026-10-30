@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {documentReference,referenceFields,transportDocuments,upgradeShipment,shipmentSearch,sortShipments,statusMatches} from './shipment-model.mjs';
+import {documentGroups,documentReference,referenceFields,transportDocuments,upgradeShipment,shipmentSearch,sortShipments,statusMatches} from './shipment-model.mjs';
 import {initialState} from './domain.mjs';
 import {clientOperations} from './client-access.mjs';
 
@@ -38,3 +38,30 @@ test('arrival sorting keeps undated operations last and does not mutate data',()
 });
 
 test("customs document reference never displays the customs status as a number",()=>{assert.equal(documentReference({customs:"CONTROL"},{id:"customs"}),"");assert.equal(documentReference({customs:"CONTROL",customsRef:"DEST-123"},{id:"customs"}),"DEST-123");});
+
+test('document folders keep shipment ownership and omit non-applicable records',()=>{
+  const operations=initialState().operations;
+  const groups=documentGroups(operations);
+  assert.equal(groups.length,operations.length);
+  for(const {op,documents} of groups){
+    assert.ok(documents.every(doc=>op.documents.includes(doc)&&doc.status!=='NA'));
+  }
+  assert.deepEqual(documentGroups([{...operations[0],documents:[{id:'none',status:'NA'}]}]),[]);
+});
+test('document search and attachment filters only return matching shipment folders',()=>{
+  const operations=initialState().operations.map((op,index)=>({...op,documents:op.documents.map((doc,i)=>index===0&&i===0?{...doc,fileId:'attached',fileName:'Factura_Córdoba.pdf'}:doc)}));
+  assert.deepEqual(documentGroups(operations,{query:'cordoba'}).map(group=>[group.op.id,group.documents.length]),[['AT-260038',1]]);
+  assert.deepEqual(documentGroups(operations,{filter:'FILES'}).map(group=>group.op.id),['AT-260038']);
+  const byHouse=documentGroups(operations,{query:operations[0].hbl,filter:'PENDING'});
+  assert.equal(byHouse.length,1);
+  assert.equal(byHouse[0].op.id,'AT-260038');
+  assert.ok(byHouse[0].documents.every(doc=>doc.status==='PENDING'));
+  assert.deepEqual(documentGroups(operations,{query:'no-match'}),[]);
+});
+test('customer document folders contain only supplied scoped and published documents',()=>{
+  const operations=initialState().operations;
+  operations[0].documents.push({id:'internal',label:'Privado',status:'PENDING',clientVisible:false});
+  const groups=documentGroups(clientOperations(operations,'client-sur'));
+  assert.deepEqual(groups.map(group=>group.op.id),['AT-260038','AT-260033']);
+  assert.ok(groups.every(group=>group.documents.every(doc=>doc.id!=='internal')));
+});

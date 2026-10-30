@@ -1,7 +1,7 @@
 import React,{useState} from 'react';
 import {Ship,Plane,Truck,ArrowRight,ArrowUpRight,Check,Copy,Search,LayoutGrid,List,FileText,FolderOpen,CalendarDays,Package,MapPin,Clock,ChevronRight,Download,SlidersHorizontal} from 'lucide-react';
 import {STATUS,CUSTOMS,MODES,DIRECTIONS,DOC_STATUS,shortDate,timeline} from './domain.mjs';
-import {documentReference,referenceFields,shipmentSearch,statusMatches,sortShipments} from './shipment-model.mjs';
+import {documentGroups,documentReference,referenceFields,shipmentSearch,statusMatches,sortShipments} from './shipment-model.mjs';
 
 export const TransportIcon=({mode,...props})=>React.createElement(mode==='AIR'?Plane:mode==='ROAD'?Truck:Ship,props);
 export function StatusPill({status}){return <span className={'status-pill '+status.toLowerCase()}><i/>{STATUS[status]||status}</span>}
@@ -38,7 +38,32 @@ export function ShipmentFocus({op,onOpen}){
 }
 export function DocumentBrowser({operations,onOpen,onDownload,internal=false}){
   const [query,setQuery]=useState(''),[filter,setFilter]=useState('ALL');
-  const all=operations.flatMap(op=>op.documents.filter(d=>d.status!=='NA').map(doc=>({op,doc})));
-  const visible=all.filter(({op,doc})=>(filter==='ALL'||(filter==='FILES'?!!doc.fileId:doc.status==='PENDING'))&&(shipmentSearch(op,query)||(doc.label+' '+(doc.fileName||'')).toLowerCase().includes(query.toLowerCase())));
-  return <div className="document-browser"><div className="explorer-top"><label className="explorer-search"><Search size={18}/><input aria-label="Buscar documentación" placeholder="Buscar documento, booking o referencia…" value={query} onChange={e=>setQuery(e.target.value)}/></label><select aria-label="Filtrar documentación" value={filter} onChange={e=>setFilter(e.target.value)}><option value="ALL">Todos los documentos</option><option value="FILES">Con archivo adjunto</option><option value="PENDING">Pendientes</option></select></div><div className="document-summary"><span><FolderOpen size={16}/><b>{all.filter(x=>x.doc.fileId).length}</b> archivos disponibles</span><span><Clock size={16}/><b>{all.filter(x=>x.doc.status==='PENDING').length}</b> pendientes</span></div><div className="document-card-grid">{visible.map(({op,doc})=><article className="document-card" key={op.id+doc.id}><div className="document-card-head"><span className="file-bubble"><FileText size={24}/></span><span className={'document-state '+doc.status.toLowerCase()}>{DOC_STATUS[doc.status]}</span></div><h3>{doc.label}</h3><p className="document-number">{documentReference(op,doc)||'Referencia: '+op.id}</p><button className="text-link" onClick={()=>onOpen(op.id,'documents')}>{op.id} · {op.origin} → {op.destination}</button><div className="document-file-name">{doc.fileName||'Sin archivo adjunto'}</div><div className="document-card-actions">{internal?<><span className={'visibility-label '+(doc.clientVisible?'shared':'')}>{doc.clientVisible?'Compartido con cliente':'Uso interno'}</span><button className="btn" onClick={()=>onOpen(op.id,'documents')}>Gestionar <ArrowUpRight size={14}/></button></>:<><small>Publicado por Atlas</small><button className="btn" disabled={!doc.fileId} onClick={()=>onDownload(op.id,doc.id)}><Download size={14}/>Descargar</button></>}</div></article>)}</div>{!visible.length&&<div className="panel empty friendly-empty"><FolderOpen/><h3>Sin documentos en esta vista</h3><p>Probá otro filtro o buscá por número de embarque.</p></div>}</div>;
+  const groups=documentGroups(operations,{query,filter});
+  const documents=groups.flatMap(group=>group.documents);
+  return <div className="document-browser">
+    <div className="document-toolbar">
+      <label className="explorer-search"><Search size={18}/><input aria-label="Buscar documentación" placeholder="Buscar embarque, booking o documento…" value={query} onChange={e=>setQuery(e.target.value)}/>{query&&<button aria-label="Borrar búsqueda de documentos" onClick={()=>setQuery('')}>×</button>}</label>
+      <select aria-label="Filtrar documentación" value={filter} onChange={e=>setFilter(e.target.value)}><option value="ALL">Todos los documentos</option><option value="FILES">Con archivo adjunto</option><option value="PENDING">Pendientes</option></select>
+    </div>
+    <div className="document-summary" role="status"><span><Ship size={16}/><b>{groups.length}</b> {groups.length===1?'embarque':'embarques'}</span><span><FolderOpen size={16}/><b>{documents.filter(doc=>doc.fileId).length}</b> archivos disponibles</span><span><Clock size={16}/><b>{documents.filter(doc=>doc.status==='PENDING').length}</b> pendientes</span></div>
+    <div className="document-groups">{groups.map(({op,documents})=><details className="document-group" key={op.id+'-'+query+'-'+filter} open={operations.length===1||!!query||filter!=='ALL'}>
+      <summary className="document-group-heading">
+        <span className={'transport-bubble '+op.mode.toLowerCase()}><TransportIcon mode={op.mode} size={22}/></span>
+        <span className="document-group-title"><strong>{op.id}</strong><span>{internal&&op.customer&&<b>{op.customer} · </b>}{op.origin} → {op.destination}</span><small>{DIRECTIONS[op.direction]} · {MODES[op.mode]}</small></span>
+        <span className="document-group-count"><b>{documents.length} {documents.length===1?'documento':'documentos'}</b><small>{documents.filter(doc=>doc.fileId).length} adjuntos · {documents.filter(doc=>doc.status==='PENDING').length} pendientes</small></span>
+        <ChevronRight className="document-group-chevron" size={19}/>
+      </summary>
+      <div className="document-group-body">
+        <ReferenceGrid op={op} compact/>
+        <ul className="grouped-document-list">{documents.map(doc=><li className="grouped-document" key={doc.id}>
+          <span className="file-bubble"><FileText size={21}/></span>
+          <div className="grouped-document-name"><h3>{doc.label}</h3>{documentReference(op,doc)&&<p>{documentReference(op,doc)}</p>}<small>{doc.fileName||'Sin archivo adjunto'}</small></div>
+          <div className="grouped-document-status"><span className={'document-state '+doc.status.toLowerCase()}>{DOC_STATUS[doc.status]}</span>{internal&&<span className={'visibility-label '+(doc.clientVisible?'shared':'')}>{doc.clientVisible?'Compartido con cliente':'Uso interno'}</span>}</div>
+          {!internal&&<button className="btn document-download" aria-label={'Descargar '+doc.label+' de '+op.id} disabled={!doc.fileId} onClick={()=>onDownload(op.id,doc.id)}><Download size={15}/><span>Descargar</span></button>}
+        </li>)}</ul>
+        <div className="document-group-footer"><button className="btn" onClick={()=>onOpen(op.id,internal?'documents':'summary')}>{internal?'Gestionar documentos':'Ver embarque'}<ArrowUpRight size={15}/></button></div>
+      </div>
+    </details>)}</div>
+    {!groups.length&&<div className="panel empty friendly-empty"><FolderOpen/><h3>Sin documentos en esta vista</h3><p>Revisá la búsqueda o el filtro seleccionado.</p></div>}
+  </div>;
 }

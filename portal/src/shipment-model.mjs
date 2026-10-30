@@ -38,3 +38,13 @@ export function statusMatches(op,filter) {
 export function sortShipments(operations,sort='eta') {
   return [...operations].sort((a,b)=>sort==='reference'?b.id.localeCompare(a.id):Number(['DELIVERED','CANCELLED'].includes(a.status))-Number(['DELIVERED','CANCELLED'].includes(b.status))||(a.eta||'9999').localeCompare(b.eta||'9999'));
 }
+
+export function documentGroups(operations,{query='',filter='ALL'}={}) {
+  const normalize=value=>String(value??'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();
+  const search=normalize(query);
+  return operations.map(op=>({op,documents:op.documents.filter(doc=>
+    doc.status!=='NA' &&
+    (filter==='ALL'||(filter==='FILES'?!!doc.fileId:doc.status==='PENDING')) &&
+    (shipmentSearch(op,query)||normalize([doc.label,doc.fileName,documentReference(op,doc)].join(' ')).includes(search))
+  )})).filter(group=>group.documents.length>0);
+}
