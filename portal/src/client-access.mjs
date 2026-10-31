@@ -9,11 +9,6 @@ export const DEMO_CUSTOMERS = [
   {id:'client-andina',name:'Andina Equipamientos'},
   {id:'client-patagonia',name:'Patagonia Maquinarias'},
 ];
-export const DEMO_VIEWS = [
-  {id:'atlas',label:'Equipo Atlas · Gestión'},
-  {id:'importador',label:'Importador · Consulta',customerId:'client-sur',name:'Industrias del Sur'},
-  {id:'exportador',label:'Exportador · Consulta',customerId:'client-pampa',name:'Pampa Alimentos'},
-];
 const seedOwners = {'AT-260038':'client-sur','AT-260037':'client-pampa','AT-260036':'client-austral','AT-260035':'client-norte','AT-260034':'client-andina','AT-260033':'client-sur','AT-260032':'client-patagonia','AT-260031':'client-austral'};
 const sharedDemoDocs = ['invoice','packing','transport','mbl','hbl','mawb','hawb','crt','customs','pod'];
 export function migrateDemoData(data) {

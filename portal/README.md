@@ -33,17 +33,29 @@ Es una **demo**, no el ERP de producción. Usa datos ficticios, fecha de referen
 
 La creación de un proyecto Neon separado fue rechazada por el proveedor: la organización está administrada por Vercel. No se reutilizó la base de DePerritos ni se conectó una base ajena. La conexión y el aprovisionamiento del almacenamiento de producción quedan pendientes.
 
-## Vista de importadores y exportadores
+## Usuarios y permisos de demostración · 31/10/2026
 
-El selector **Vista demo** permite comparar Equipo Atlas (gestión), Importador (Industrias del Sur) y Exportador (Pampa Alimentos). También se puede abrir `?vista=importador` o `?vista=exportador`. Estos parámetros seleccionan una demostración; no autentican ni autorizan usuarios.
+La barra **Vista demo** presenta Administrador, Freight Forwarder y Cliente. El selector secundario elige un usuario de ejemplo. **No es un login ni una barrera de seguridad de producción.** Los perfiles, permisos, operaciones y archivos continúan en localStorage/IndexedDB. No se envían invitaciones, no se piden contraseñas y los datos no se sincronizan entre navegadores.
 
-El portal de clientes recibe una proyección explícita por `customerId`: únicamente embarques de esa empresa, estados de transporte y aduana, fechas, seguimiento y documentos publicados. No recibe costos, márgenes, cotizaciones, tareas, observaciones internas ni historial interno. Un cliente puede tener tanto importaciones como exportaciones; la dirección no determina su acceso.
+- **Administrador:** alta, edición y desactivación de usuarios; empresa asociada; permisos por módulo; registro de facturas ya emitidas. Se validan emails duplicados, empresa existente y conservación de un administrador activo.
+- **Freight Forwarder:** únicamente Operaciones, Documentación y Facturas emitidas. Operaciones/documentos admiten Sin acceso, Consulta o Gestión. Facturas admiten Sin acceso o Consulta. No se muestran cotizaciones, costos, márgenes, tareas, clientes ni administración. El detalle y las acciones se ajustan a los permisos, con comprobación adicional en la función de actualización.
+- **Cliente:** un solo perfil para importaciones y exportaciones de la misma empresa, vinculadas por `customerId`, nunca por nombre. Filtros visibles Todos / Importación / Exportación. Sólo consulta y descarga de documentación publicada, y consulta de facturas compartidas de su empresa; no puede modificar operaciones ni crear usuarios.
+- **Facturas emitidas:** separadas de la factura comercial del checklist. El administrador registra un comprobante ya emitido, su embarque, fecha, moneda, importe, PDF opcional y visibilidad. El registro no emite comprobantes fiscales ni conecta ARCA. Los borradores no aparecen en la consulta y la descarga vuelve a comprobar los permisos y la empresa.
+- La migración es aditiva: mantiene operaciones, adjuntos, perfiles editados, estados y asociaciones. `?vista=importador` y `?vista=exportador` se conservan como aliases de los dos clientes de ejemplo; la UI no tiene esos perfiles. Nuevas URLs usan `?vista=cliente`, `?vista=ff` o `?vista=admin`, con `perfil` opcional.
 
-Atlas controla la opción **Visible al cliente** de cada documento. Los nuevos archivos y los reemplazos quedan internos hasta que Atlas los comparte expresamente. El cliente puede consultar y descargar documentos compartidos; no puede crear operaciones, modificar estados, subir archivos ni administrar clientes. La descarga de la demo vuelve a comprobar empresa, embarque y publicación antes de leer el archivo local.
+El portal de clientes recibe una proyección explícita de datos públicos. La vista FF excluye costos, historial financiero y campos privados no declarados. Estas proyecciones mejoran la separación del prototipo, **no protegen los datos ficticios del bundle ni del almacenamiento local**. El selector puede volver al administrador en la demo.
 
-La migración conserva cambios existentes y nunca publica automáticamente adjuntos previos. Los nuevos expedientes seleccionan una identidad explícita de cliente; una razón social escrita como nuevo cliente no se vincula por coincidencia de nombre.
+Los archivos nuevos o reemplazados quedan internos hasta compartirlos expresamente. La migración no publica adjuntos anteriores. Las descargas de clientes comprueban empresa, embarque y publicación.
 
-**No es una barrera de seguridad de producción:** todos los datos ficticios siguen en el bundle/localStorage y el selector permite volver a Atlas. Para clientes reales, el backend debe obtener `customerId` de la sesión autenticada, rechazar escrituras de clientes, filtrar cada consulta/contador por ese ID y autorizar cada descarga privada. El selector se elimina en ese entorno. No cargar documentación real en esta demo pública.
+Para habilitar usuarios reales, el servidor debe autenticar la sesión, derivar rol/permisos/customerId desde la base y aplicar las mismas restricciones en cada lectura, modificación y descarga privada. Eliminar el selector en esa versión, conectar almacenamiento privado y probar revocación, sesiones, concurrencia y recuperación de cuentas.
+
+### Infraestructura pendiente
+
+La publicación Vercel `atlas-cargo-operaciones` no tiene variables de entorno de base o autenticación configuradas. El 31/10/2026 el conector Vercel rechazó la consulta de integraciones con HTTP 403. No hay CLI Vercel autenticada disponible en este entorno. Neon sólo expone `deperritos-production`; no se reutilizó esa base de otro proyecto. El aprovisionamiento anterior de una base independiente también fue rechazado por tratarse de una organización administrada por Vercel.
+
+### Verificación de perfiles
+
+`profiles.test.mjs` verifica permisos máximos por rol, sólo consulta, usuarios inactivos, aislamiento entre empresas incluyendo ambos sentidos de operación, rechazo de cambios financieros desde FF, alta exclusiva de administradores, email único, protección del último administrador, migración y alcance de facturas. La revisión de navegador comprueba altas, permisos de consulta, creación de una exportación para un cliente con importaciones y visibilidad de facturas por empresa. Los registros QA sólo existen en la vista previa del navegador.
 
 ## Correspondencia con el ERP revisado
 
